@@ -94,7 +94,7 @@ The installer will:
 - Configure Nginx as a reverse proxy with security headers
 - Print a **one-time bootstrap credential** — copy it before the screen clears
 
-> **Save your bootstrap credential.** It is shown exactly once and cannot be recovered. If you lose it, re-run the installer.
+> **Save your bootstrap credential.** It is shown exactly once and cannot be recovered. If you lose it, run sudo vector-bootstrap-reset to generate new credentials or re-run the installer itself.
 
 ### Step 5 — Complete setup in the browser
 
