@@ -70,7 +70,7 @@ Point your domain's A record to the server's public IP. This must resolve before
 
 ```bash
 # Download the release
-wget https://github.com/SWARDAKSH777/vector/releases/download/v6.0.0-rc6/vector-release.tar.gz
+wget https://github.com/SWARDAKSH777/vector/releases/download/v6.0.0-rc7/vector-release.tar.gz
 
 # Verify the checksum (replace with published hash)
 sha256sum vector-release.tar.gz
@@ -183,7 +183,7 @@ gpg --symmetric vector-backup-$(date +%F).tar.gz
 
 ```bash
 # Download and verify the new release bundle
-wget https://github.com/SWARDAKSH777/vector/releases/download/v6.0.0-rc6/vector-release.tar.gz
+wget https://github.com/SWARDAKSH777/vector/releases/download/v6.0.0-rc7/vector-release.tar.gz
 tar -xzf vector-release.tar.gz
 cd vector-*
 
