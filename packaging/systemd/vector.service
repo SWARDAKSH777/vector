@@ -1,0 +1,49 @@
+[Unit]
+Description=Vector URL Shortener
+Requires=vector-helper.socket
+Wants=network-online.target nginx.service
+After=network-online.target nginx.service vector-helper.socket
+
+[Service]
+Type=simple
+User=vector
+Group=vector
+UMask=0077
+WorkingDirectory=/opt/vector
+ExecStart=/opt/vector/vector
+Environment=DATA_DIR=/opt/vector/data
+Environment=VECTOR_MASTER_KEY_FILE=/etc/vector/master.key
+Environment=VECTOR_HELPER_SOCKET=/run/vector-helper.sock
+Environment=VECTOR_PROXY_KEY_FILE=/etc/vector/proxy.key
+EnvironmentFile=-/etc/vector/runtime.env
+Environment=LISTEN_ADDR=127.0.0.1:8081
+Environment=INTERNAL_PORT=8081
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictRealtime=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/opt/vector/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Weekly refresh of Vector Cloudflare edge network allowlist
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=7d
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

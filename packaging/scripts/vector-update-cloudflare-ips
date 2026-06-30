@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+umask 0027
+
+TARGET=/etc/nginx/conf.d/vector-cloudflare-trust-map.conf
+TMPDIR="$(mktemp -d /tmp/vector-cf-ips.XXXXXX)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+[[ ${EUID:-$(id -u)} -eq 0 ]] || { echo "must run as root" >&2; exit 1; }
+[[ ! -L "$TARGET" ]] || { echo "unsafe target symlink: $TARGET" >&2; exit 1; }
+
+curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+  --connect-timeout 5 --max-time 20 https://www.cloudflare.com/ips-v4/ > "$TMPDIR/v4"
+curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+  --connect-timeout 5 --max-time 20 https://www.cloudflare.com/ips-v6/ > "$TMPDIR/v6"
+
+python3 - "$TMPDIR/v4" "$TMPDIR/v6" "$TMPDIR/new.conf" <<'PY'
+import datetime, ipaddress, pathlib, sys
+v4_path, v6_path, out_path = map(pathlib.Path, sys.argv[1:])
+
+def parse(path, version):
+    raw = path.read_text(encoding='ascii').split()
+    nets = []
+    for value in raw:
+        net = ipaddress.ip_network(value, strict=True)
+        if net.version != version:
+            raise SystemExit(f"unexpected IPv{net.version} range in IPv{version} list: {value}")
+        nets.append(str(net))
+    minimum = 10 if version == 4 else 5
+    if not (minimum <= len(nets) <= 200):
+        raise SystemExit(f"unexpected Cloudflare IPv{version} range count: {len(nets)}")
+    if len(nets) != len(set(nets)):
+        raise SystemExit(f"duplicate Cloudflare IPv{version} ranges")
+    return nets
+
+v4 = parse(v4_path, 4)
+v6 = parse(v6_path, 6)
+lines = [
+    '# Managed by Vector URL Shortener. Cloudflare edge allowlist snapshot.',
+    '# Source: https://www.cloudflare.com/ips/',
+    f'# Updated: {datetime.datetime.now(datetime.timezone.utc).date().isoformat()}',
+    'geo $remote_addr $vector_from_cloudflare {',
+    '    default 0;',
+]
+lines += [f'    {network} 1;' for network in v4 + v6]
+lines += [
+    '}', '',
+    '# Direct clients cannot choose these values: the selection key is the actual',
+    '# public-side TCP peer address observed by Nginx.',
+    'map "$vector_from_cloudflare:$http_cf_connecting_ip" $vector_client_ip {',
+    '    ~^1:(.+)$ $1;',
+    '    default $remote_addr;',
+    '}', '',
+    'map "$vector_from_cloudflare:$http_cf_ipcountry" $vector_country_code {',
+    '    ~^1:[A-Za-z][A-Za-z]$ $http_cf_ipcountry;',
+    '    default "";',
+    '}', '',
+]
+out_path.write_text('\n'.join(lines), encoding='ascii')
+PY
+
+install -d -o root -g root -m 0755 /etc/nginx/conf.d
+BACKUP="$TMPDIR/old.conf"
+[[ ! -e "$TARGET" ]] || cp -a -- "$TARGET" "$BACKUP"
+install -o root -g root -m 0644 "$TMPDIR/new.conf" "$TARGET"
+if ! nginx -t; then
+  if [[ -f "$BACKUP" ]]; then install -o root -g root -m 0644 "$BACKUP" "$TARGET"; else rm -f -- "$TARGET"; fi
+  nginx -t >/dev/null 2>&1 || true
+  echo "Cloudflare range update rejected because Nginx validation failed" >&2
+  exit 1
+fi
+systemctl is-active --quiet nginx.service && systemctl reload nginx.service

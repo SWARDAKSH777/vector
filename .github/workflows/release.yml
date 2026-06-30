@@ -1,0 +1,95 @@
+name: Build and attest release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.4"
+          cache-dependency-path: backend/go.sum
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install native dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential libsqlite3-dev
+
+      - name: Verify dependency metadata is committed
+        run: |
+          cd backend
+          go mod tidy
+          go mod vendor
+          git diff --exit-code -- go.mod go.sum vendor
+          cd ../frontend
+          ! grep -q '"resolved": "file:' package-lock.json
+
+      - name: Validate installer and release scripts
+        run: make validate-source
+
+      - name: Test backend
+        run: |
+          make test
+          make vet
+          make race
+
+      - name: Audit and build frontend
+        run: |
+          cd frontend
+          npm ci --include=optional
+          npm audit --audit-level=high
+          npm run typecheck
+          npm run build
+          cd ..
+          rm -rf backend/web
+          cp -a frontend/dist backend/web
+
+      - name: Build official binary
+        run: |
+          test "$(go env GOVERSION)" = "go1.26.4"
+          make VERSION="${GITHUB_REF_NAME}" COMMIT="$(git rev-parse --short=12 HEAD)" BUILD_TIME="$(git show -s --format=%cI HEAD)" release-linux-embedded
+          go version -m vector-linux-amd64 | tee BUILDINFO.txt
+          grep -F 'go1.26.4' BUILDINFO.txt
+
+      - name: Package release
+        run: SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" scripts/package-release.sh "${GITHUB_REF_NAME}" release-out
+
+      - name: Attest release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            release-out/vector-release.tar.gz
+            release-out/vector-linux-amd64
+            release-out/SHA256SUMS
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          [[ "${GITHUB_REF_NAME}" == *-* ]] && flags+=(--prerelease) || flags+=(--latest)
+          gh release create "${GITHUB_REF_NAME}" \
+            release-out/vector-release.tar.gz \
+            release-out/vector-linux-amd64 \
+            release-out/SHA256SUMS \
+            release-out/BUILDINFO.txt \
+            --verify-tag --generate-notes --title "${GITHUB_REF_NAME}" "${flags[@]}"

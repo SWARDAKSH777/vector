@@ -1,0 +1,15 @@
+component,run,rss_kib,rss_mib,notes
+vector-web,1,31848,31.10,warm idle low-memory profile
+vector-web,2,28916,28.24,warm idle low-memory profile
+vector-web,3,34256,33.45,warm idle low-memory profile
+vector-web,4,32228,31.47,warm idle low-memory profile
+vector-web,5,33844,33.05,warm idle low-memory profile
+vector-web-median,median,32228,31.47,median of five warm runs
+nginx-master-plus-one-worker,1,14192,13.86,minimal one-worker reverse-proxy process total
+vector-helper,1,22680,22.15,temporary on-demand process
+vector-helper,2,25988,25.38,temporary on-demand process
+vector-helper,3,24056,23.49,temporary on-demand process
+vector-helper-median,median,24056,23.49,not resident after 30 idle seconds
+normal-native-total,derived,46420,45.33,web median plus nginx
+temporary-domain-operation-total,derived,70476,68.82,normal total plus helper median
+vector-web-load-peak,5000-requests,32024,31.27,health endpoint concurrency 25; zero failures

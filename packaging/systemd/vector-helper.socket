@@ -1,0 +1,16 @@
+[Unit]
+Description=Vector privileged helper socket
+Before=vector.service
+
+[Socket]
+ListenStream=/run/vector-helper.sock
+SocketUser=root
+SocketGroup=vector
+SocketMode=0660
+DirectoryMode=0750
+Backlog=16
+MaxConnections=16
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

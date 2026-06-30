@@ -1,0 +1,42 @@
+[Unit]
+Description=Vector constrained privileged helper
+Requires=vector-helper.socket
+Wants=network-online.target nginx.service
+After=network-online.target nginx.service vector-helper.socket
+
+[Service]
+Type=simple
+User=root
+Group=vector
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=VECTOR_INTERNAL_PORT=8081
+Environment=VECTOR_PROXY_KEY_FILE=/etc/vector/proxy.key
+Environment=VECTOR_HELPER_IDLE_TIMEOUT_SECONDS=30
+Environment=GOMAXPROCS=1
+Environment=GOMEMLIMIT=32MiB
+Environment=GOGC=50
+Environment=GODEBUG=madvdontneed=1
+UMask=0077
+ExecStart=/opt/vector/vector helper
+Restart=no
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/etc/nginx/conf.d /etc/letsencrypt -/var/lib/letsencrypt -/var/log/letsencrypt /var/lib/vector-acme -/run/nginx.pid -/var/log/nginx -/var/lib/nginx
