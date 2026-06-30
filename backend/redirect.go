@@ -138,6 +138,15 @@ func (s *server) isBaseLinkHost(host string) (bool, error) {
 // point of redirect. This closes races between the initial link lookup and the
 // click update, and is also used by password-unlock POST requests which do not
 // pass through the normal GET lookup path.
+func writeDynamicLinkPage(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
+}
+
 func (s *server) writeCurrentLinkUnavailable(w http.ResponseWriter, id int64) bool {
 	var status string
 	var expiresAt sql.NullTime
@@ -158,22 +167,16 @@ func (s *server) writeCurrentLinkUnavailable(w http.ResponseWriter, id int64) bo
 	now := time.Now().UTC()
 	if status == "expired" || (expiresAt.Valid && !now.Before(expiresAt.Time.UTC())) {
 		_, _ = s.db.Exec(`UPDATE links SET status='expired' WHERE id=? AND status='active'`, id)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusGone)
-		_, _ = w.Write([]byte(expiredPageHTML))
+		writeDynamicLinkPage(w, http.StatusGone, expiredPageHTML)
 		return true
 	}
 	if status != "active" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(pausedPageHTML))
+		writeDynamicLinkPage(w, http.StatusNotFound, pausedPageHTML)
 		return true
 	}
 	if maxClicks.Valid && maxClicks.Int64 > 0 && lifetimeClicks >= maxClicks.Int64 {
 		_, _ = s.db.Exec(`UPDATE links SET status='paused' WHERE id=? AND status='active'`, id)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusGone)
-		_, _ = w.Write([]byte(clickLimitPageHTML))
+		writeDynamicLinkPage(w, http.StatusGone, clickLimitPageHTML)
 		return true
 	}
 	return false
@@ -184,21 +187,15 @@ func (s *server) enforceAndRedirect(w http.ResponseWriter, r *http.Request, id i
 	passwordHash sql.NullString, expiresAt sql.NullTime, maxClicks sql.NullInt64, code string) {
 	if expiresAt.Valid && time.Now().After(expiresAt.Time) {
 		_, _ = s.db.Exec(`UPDATE links SET status='expired' WHERE id=?`, id)
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusGone)
-		_, _ = w.Write([]byte(expiredPageHTML))
+		writeDynamicLinkPage(w, http.StatusGone, expiredPageHTML)
 		return
 	}
 	if status == "expired" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusGone)
-		_, _ = w.Write([]byte(expiredPageHTML))
+		writeDynamicLinkPage(w, http.StatusGone, expiredPageHTML)
 		return
 	}
 	if status != "active" {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(pausedPageHTML))
+		writeDynamicLinkPage(w, http.StatusNotFound, pausedPageHTML)
 		return
 	}
 	if maxClicks.Valid && maxClicks.Int64 > 0 {
@@ -336,6 +333,9 @@ func (s *server) logClickAndRedirectMode(w http.ResponseWriter, r *http.Request,
 		if s.writeCurrentLinkUnavailable(w, linkID) {
 			return
 		}
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
 		http.Redirect(w, r, dest, http.StatusFound)
 		return
 	}
@@ -384,6 +384,9 @@ func (s *server) logClickAndRedirectMode(w http.ResponseWriter, r *http.Request,
 	if eventID > 0 && !capture.CountryKnown && capture.ClientIP != "" && s.geo != nil {
 		s.geo.enqueue(eventID, capture.ClientIP)
 	}
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, private")
+	w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Expires", "0")
 	http.Redirect(w, r, dest, http.StatusFound)
 }
 
