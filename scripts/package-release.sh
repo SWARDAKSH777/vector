@@ -31,9 +31,9 @@ stage="$work/vector-${VERSION#v}"
 mkdir -p "$stage"
 
 for path in \
-  install.sh vector-total-purge.sh README.md LICENSE SECURITY.md PRIVACY.md \
-  DEPLOYMENT.md THREAT_MODEL.md THIRD_PARTY_NOTICES.md COMPLIANCE.md \
-  RELEASE_STATUS.md SECURITY_AUDIT_FINAL.md packaging; do
+ install.sh vector-total-purge.sh README.md LICENSE SECURITY.md PRIVACY.md \
+ DEPLOYMENT.md THREAT_MODEL.md THIRD_PARTY_NOTICES.md SBOM.cdx.json \
+ packaging; do
   [[ -e "$ROOT/$path" ]] || { echo "missing release input: $path" >&2; exit 1; }
   cp -a -- "$ROOT/$path" "$stage/"
 done

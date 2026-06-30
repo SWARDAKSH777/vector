@@ -210,7 +210,7 @@ The installer verifies checksums before modifying anything and creates a rollbac
 | Analytics privacy | Pseudonymous visitor IDs; no raw IP stored; referrer origin only; GPC/DNT honored |
 | Dependency supply chain | Vendored `golang.org/x/crypto`; zero runtime CGO (except SQLite); `npm audit` clean |
 
-See [SECURITY.md](SECURITY.md), [SECURITY_AUDIT.md](SECURITY_AUDIT.md), [THREAT_MODEL.md](THREAT_MODEL.md), and [PRIVACY.md](PRIVACY.md) for full details.
+See [SECURITY.md](SECURITY.md), [THREAT_MODEL.md](THREAT_MODEL.md), and [PRIVACY.md](PRIVACY.md) for full details.
 
 ---
 
@@ -228,4 +228,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## What's not included
 
-MFA/WebAuthn, SAML/OIDC/SSO, RBAC, multi-tenancy, high availability, external KMS, distributed rate limiting, and formal compliance certification are outside the scope of this release. See [ROADMAP_RECOMMENDATIONS.md](ROADMAP_RECOMMENDATIONS.md) for planned and suggested additions.
+MFA/WebAuthn, SAML/OIDC/SSO, RBAC, multi-tenancy, high availability, external KMS, distributed rate limiting, and formal compliance certification are outside the scope of this release.
