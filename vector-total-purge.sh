@@ -152,9 +152,41 @@ if ((PURGE_BACKUPS)); then
   rm -rf /root/vector-nginx-stale-* /root/vector-pre-purge-* /root/vector-backup-* 2>/dev/null || true
   ok "Vector backup archives removed"
 fi
-userdel vector >/dev/null 2>&1 || true
-groupdel vector >/dev/null 2>&1 || true
-ok "Application and master key removed"
+if id vector >/dev/null 2>&1; then
+  log "Terminating remaining Vector processes"
+
+  # Stop user-scoped processes gracefully first.
+  pkill -TERM -u vector 2>/dev/null || true
+
+  for _ in {1..20}; do
+    pgrep -u vector >/dev/null 2>&1 || break
+    sleep 0.25
+  done
+
+  # Forcefully terminate anything that ignored SIGTERM.
+  pkill -KILL -u vector 2>/dev/null || true
+
+  for _ in {1..20}; do
+    pgrep -u vector >/dev/null 2>&1 || break
+    sleep 0.25
+  done
+
+  if pgrep -u vector >/dev/null 2>&1; then
+    fail "Vector-owned processes are still running; refusing to report a successful purge"
+  fi
+
+  userdel vector || fail "Could not remove the Vector system user"
+fi
+
+if getent group vector >/dev/null 2>&1; then
+  groupdel vector || fail "Could not remove the Vector system group"
+fi
+
+id vector >/dev/null 2>&1   && fail "Vector system user still exists after purge"
+
+getent group vector >/dev/null 2>&1   && fail "Vector system group still exists after purge"
+
+ok "Application, master key, system user and system group removed"
 
 if ((CLOSE_PORT)); then
   log "Closing common firewall rules for TCP 8080"

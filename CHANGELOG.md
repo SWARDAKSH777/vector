@@ -1,5 +1,18 @@
 # Changelog
 
+## 6.0.0-rc8 — purge verification and release-warning correction
+
+- Fixed the total-purge script silently ignoring `userdel` and `groupdel`
+  failures.
+- The purge now terminates remaining Vector-owned processes, verifies that no
+  such processes remain, removes the system user and group, and fails if
+  either identity survives.
+- Corrected the installer warning so release candidates are described as
+  pre-release builds rather than incorrectly described as unsigned builds.
+- GitHub artifact signing/provenance remains externally verifiable using
+  `gh attestation verify`.
+
+
 ## 6.0.0-rc5 — bootstrap fail-closed correction (independently verified)
 
 This entry documents fixes applied after an independent build-and-test pass

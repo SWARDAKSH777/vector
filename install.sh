@@ -79,8 +79,10 @@ case "$(uname -m)" in
 esac
 [[ -f "$SOURCE_BINARY" ]] || fail "vector-linux-amd64 is missing next to install.sh"
 release_info="$("$SOURCE_BINARY" --version 2>/dev/null || true)"
-if [[ "$release_info" == *"-rc"* || "$release_info" == *"unverified-local"* ]]; then
-  warn "This binary identifies as a release candidate/local build: ${release_info:-unknown}. Do not treat it as a signed public production release."
+if [[ "$release_info" == *"unverified-local"* || "$release_info" == "Vector dev "* ]]; then
+  warn "This binary identifies as an unverified local/development build: ${release_info:-unknown}."
+elif [[ "$release_info" == *"-rc"* ]]; then
+  warn "This binary identifies as a release candidate: ${release_info:-unknown}. It is pre-release software; verify SHA256SUMS and the published GitHub attestation before production use."
 fi
 
 log "Installing runtime dependencies"
