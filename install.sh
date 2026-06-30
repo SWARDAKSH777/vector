@@ -495,13 +495,13 @@ server {
     location / {
         proxy_pass http://127.0.0.1:8081;
         proxy_http_version 1.1;
-        proxy_set_header Host $host;
+        proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $vector_client_ip;
         proxy_set_header X-Forwarded-For $vector_client_ip;
         proxy_set_header X-Vector-Cloudflare-Trusted $vector_from_cloudflare;
         proxy_set_header X-Vector-Country $vector_country_code;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Host $http_host;
         proxy_set_header X-Vector-Proxy-Auth "__VECTOR_PROXY_AUTH__";
         proxy_connect_timeout 5s;
         # DNS-01 certificate provisioning can take several minutes.
@@ -551,7 +551,13 @@ for path in pathlib.Path("/etc/nginx/conf.d").glob("vector-*.conf"):
         if re.search(pattern,text,flags=re.M):
             text=re.sub(pattern,line,text,flags=re.M)
         else:
-            text=text.replace("        proxy_set_header X-Forwarded-Host $host;", "        proxy_set_header X-Forwarded-Host $host;\n"+line)
+            for marker in (
+                "        proxy_set_header X-Forwarded-Host $http_host;",
+                "        proxy_set_header X-Forwarded-Host $host;",
+            ):
+                if marker in text:
+                    text = text.replace(marker, marker+"\n"+line, 1)
+                    break
     fd,tmp=tempfile.mkstemp(prefix=".vector-nginx.",dir=str(path.parent),text=True)
     try:
         with os.fdopen(fd,"w",encoding="utf-8",newline="\n") as f:
