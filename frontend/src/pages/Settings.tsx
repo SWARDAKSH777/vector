@@ -38,7 +38,11 @@ export function SettingsPage() {
 
   async function savePrivacy() {
     if (!privacy) return; setPrivacyLoading(true); setPrivacyMessage("");
-    try { setPrivacy(await api.updatePrivacySettings(privacy)); setPrivacyMessage("Privacy settings saved"); }
+    try { setPrivacy(await api.updatePrivacySettings({
+        analytics_enabled: privacy.analytics_enabled,
+        analytics_retention_days: privacy.analytics_retention_days,
+        audit_retention_days: privacy.audit_retention_days,
+      })); setPrivacyMessage("Privacy settings saved"); }
     catch (err: any) { setPrivacyMessage(err.message); } finally { setPrivacyLoading(false); }
   }
 

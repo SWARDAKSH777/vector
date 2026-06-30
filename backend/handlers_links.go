@@ -586,6 +586,16 @@ func (s *server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 	} else if req.MaxClicks != nil {
 		effectiveMax = sql.NullInt64{Int64: *req.MaxClicks, Valid: true}
 	}
+	reactivateAfterClearingMax := req.Status == nil &&
+		req.ClearMaxClicks &&
+		currentStatus == "paused" &&
+		currentMax.Valid &&
+		currentMax.Int64 > 0 &&
+		lifetimeClicks >= currentMax.Int64
+	if reactivateAfterClearingMax {
+		effectiveStatus = "active"
+	}
+
 	if effectiveStatus == "active" {
 		if effectiveExpiry.Valid && !effectiveExpiry.Time.After(time.Now()) {
 			writeErr(w, http.StatusConflict, "clear or extend the expired date before activating this link")
@@ -620,6 +630,8 @@ func (s *server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Status != nil {
 		exec(`UPDATE links SET status=? WHERE id=? AND user_id=?`, *req.Status, id, uid)
+	} else if reactivateAfterClearingMax {
+		exec(`UPDATE links SET status='active' WHERE id=? AND user_id=?`, id, uid)
 	}
 	if req.ClearPassword {
 		exec(`UPDATE links SET password_hash=NULL WHERE id=? AND user_id=?`, id, uid)

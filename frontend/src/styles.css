@@ -117,3 +117,52 @@
 @utility animate-slide-up {
   animation: slide-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
+
+/* Vector responsive safety layer */
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+main {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+img,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+input,
+textarea,
+button {
+  min-width: 0;
+}
+
+.recharts-responsive-container,
+.recharts-wrapper {
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+@media (max-width: 640px) {
+  [role="dialog"] {
+    max-width: calc(100vw - 0.5rem);
+  }
+
+  table {
+    font-size: 0.75rem;
+  }
+}

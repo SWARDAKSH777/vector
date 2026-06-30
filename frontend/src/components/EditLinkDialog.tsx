@@ -42,6 +42,7 @@ export function EditLinkDialog({ link, onClose, onUpdated }: Props) {
         clear_expiry: clearExpiry,
         max_clicks: clearMaxClicks ? undefined : (maxClicks ? parseInt(maxClicks, 10) : undefined),
         clear_max_clicks: clearMaxClicks,
+      status: clearMaxClicks && link.status === "paused" ? "active" : undefined,
       });
       onUpdated(updated); onClose();
     } catch (err: any) { setError(err.message); }

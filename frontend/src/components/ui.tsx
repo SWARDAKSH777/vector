@@ -1,4 +1,5 @@
 import React from "react";
+import { createPortal } from "react-dom";
 import { cn } from "../lib/utils";
 
 // ---- Button ----
@@ -8,7 +9,7 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   loading?: boolean;
 }
 export function Button({ variant = "primary", size = "md", loading, className, children, disabled, ...props }: ButtonProps) {
-  const base = "inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none select-none";
+  const base = "inline-flex max-w-full min-w-0 items-center justify-center gap-2 font-medium rounded-lg transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none select-none";
   const variants = {
     primary: "bg-primary text-primary-foreground hover:opacity-90 shadow-sm",
     secondary: "bg-secondary text-secondary-foreground hover:bg-accent border border-border",
@@ -90,7 +91,7 @@ export function Badge({ children, variant = "default", className }: BadgeProps) 
 
 // ---- Card ----
 export function Card({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <div className={cn("rounded-xl border border-border bg-card p-4 sm:p-5 shadow-sm", className)}>{children}</div>;
+  return <div className={cn("min-w-0 max-w-full rounded-xl border border-border bg-card p-4 sm:p-5 shadow-sm", className)}>{children}</div>;
 }
 
 // ---- Modal (bottom sheet on mobile, centered on desktop) ----
@@ -113,7 +114,7 @@ export function Modal({ open, onClose, title, children, maxWidth = "sm:max-w-lg"
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className={cn(
-        "relative w-full bg-card shadow-2xl border border-border animate-slide-up",
+        "relative w-full max-w-[calc(100vw-1rem)] min-w-0 bg-card shadow-2xl border border-border animate-slide-up",
         "rounded-t-2xl sm:rounded-2xl",
         "max-h-[92dvh] sm:max-h-[90dvh] overflow-y-auto",
         "sm:mx-4",
@@ -161,43 +162,300 @@ export function EmptyState({ icon, title, description, action }: {
 }
 
 // ---- Select ----
-interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElement> {
+interface SelectProps extends Omit<React.SelectHTMLAttributes<HTMLSelectElement>, "children"> {
   label?: React.ReactNode;
+  children: React.ReactNode;
 }
 
-export function Select({ label, className, children, id, ...props }: SelectProps) {
+interface ParsedSelectOption {
+  value: string;
+  label: React.ReactNode;
+  disabled: boolean;
+}
+
+export function Select({
+  label,
+  className,
+  children,
+  id,
+  value,
+  defaultValue,
+  onChange,
+  disabled,
+  name,
+}: SelectProps) {
   const generatedID = React.useId();
   const selectID = id ?? generatedID;
+  const listboxID = `${selectID}-listbox`;
+  const buttonRef = React.useRef<HTMLButtonElement>(null);
+  const menuRef = React.useRef<HTMLDivElement>(null);
+  const [open, setOpen] = React.useState(false);
+  const [internalValue, setInternalValue] = React.useState(
+    defaultValue == null ? "" : String(defaultValue),
+  );
+  const [activeIndex, setActiveIndex] = React.useState(0);
+  const [position, setPosition] = React.useState({
+    top: 0,
+    left: 0,
+    width: 240,
+    maxHeight: 280,
+  });
+
+  const options = React.useMemo<ParsedSelectOption[]>(() => {
+    return React.Children.toArray(children).flatMap((child) => {
+      if (
+        !React.isValidElement<
+          React.OptionHTMLAttributes<HTMLOptionElement>
+        >(child) ||
+        child.type !== "option"
+      ) {
+        return [];
+      }
+
+      return [{
+        value: child.props.value == null ? "" : String(child.props.value),
+        label: child.props.children,
+        disabled: Boolean(child.props.disabled),
+      }];
+    });
+  }, [children]);
+
+  const selectedValue = value === undefined ? internalValue : String(value);
+  const selectedIndex = Math.max(
+    0,
+    options.findIndex((option) => option.value === selectedValue),
+  );
+  const selected = options[selectedIndex];
+
+  const updatePosition = React.useCallback(() => {
+    const trigger = buttonRef.current;
+    if (!trigger) return;
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 8;
+    const below = window.innerHeight - rect.bottom - viewportPadding;
+    const above = rect.top - viewportPadding;
+    const openUpward = below < 180 && above > below;
+    const maxHeight = Math.max(140, Math.min(320, openUpward ? above : below));
+    const width = Math.min(
+      Math.max(rect.width, 180),
+      window.innerWidth - viewportPadding * 2,
+    );
+    const left = Math.min(
+      Math.max(viewportPadding, rect.left),
+      window.innerWidth - width - viewportPadding,
+    );
+
+    setPosition({
+      top: openUpward
+        ? Math.max(viewportPadding, rect.top - maxHeight - 6)
+        : rect.bottom + 6,
+      left,
+      width,
+      maxHeight,
+    });
+  }, []);
+
+  React.useLayoutEffect(() => {
+    if (!open) return;
+    updatePosition();
+
+    const onViewportChange = () => updatePosition();
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+
+    return () => {
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
+  }, [open, updatePosition]);
+
+  React.useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !buttonRef.current?.contains(target) &&
+        !menuRef.current?.contains(target)
+      ) {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [open]);
+
+  function firstEnabledIndex(direction = 1, from = selectedIndex) {
+    if (options.length === 0) return 0;
+
+    let index = from;
+    for (let checked = 0; checked < options.length; checked += 1) {
+      index = (index + direction + options.length) % options.length;
+      if (!options[index]?.disabled) return index;
+    }
+    return selectedIndex;
+  }
+
+  function choose(option: ParsedSelectOption) {
+    if (option.disabled) return;
+
+    if (value === undefined) {
+      setInternalValue(option.value);
+    }
+
+    const target = { value: option.value } as HTMLSelectElement;
+    onChange?.({
+      target,
+      currentTarget: target,
+    } as React.ChangeEvent<HTMLSelectElement>);
+
+    setOpen(false);
+    requestAnimationFrame(() => buttonRef.current?.focus());
+  }
+
+  function openMenu() {
+    if (disabled || options.length === 0) return;
+    setActiveIndex(selectedIndex);
+    setOpen(true);
+  }
+
+  function onButtonKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (!open) openMenu();
+      else setActiveIndex((index) => firstEnabledIndex(1, index));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!open) openMenu();
+      else setActiveIndex((index) => firstEnabledIndex(-1, index));
+    } else if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (!open) openMenu();
+      else if (options[activeIndex]) choose(options[activeIndex]);
+    } else if (event.key === "Escape") {
+      setOpen(false);
+    } else if (event.key === "Home" && open) {
+      event.preventDefault();
+      setActiveIndex(firstEnabledIndex(1, -1));
+    } else if (event.key === "End" && open) {
+      event.preventDefault();
+      setActiveIndex(firstEnabledIndex(-1, 0));
+    }
+  }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex min-w-0 flex-col gap-1.5">
       {label && (
         <label htmlFor={selectID} className="text-xs font-medium text-foreground">
           {label}
         </label>
       )}
-      <div className="relative">
-        <select
-          {...props}
-          id={selectID}
-          className={cn(
-            "h-10 w-full appearance-none rounded-lg border border-input bg-background px-3 pr-10 text-sm text-foreground shadow-sm transition-colors",
-            "hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
-            "disabled:cursor-not-allowed disabled:opacity-50",
-            className,
-          )}
-        >
-          {children}
-        </select>
+
+      {name && <input type="hidden" name={name} value={selectedValue} />}
+
+      <button
+        ref={buttonRef}
+        id={selectID}
+        type="button"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listboxID}
+        disabled={disabled}
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        onKeyDown={onButtonKeyDown}
+        className={cn(
+          "flex h-10 w-full min-w-0 items-center justify-between gap-3 rounded-lg border border-input bg-background px-3 text-left text-sm text-foreground shadow-sm transition-colors",
+          "hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
+          "disabled:cursor-not-allowed disabled:opacity-50",
+          className,
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate">
+          {selected?.label ?? "Select"}
+        </span>
         <svg
           aria-hidden="true"
           viewBox="0 0 20 20"
           fill="none"
-          className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+          className={cn(
+            "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-180",
+          )}
         >
-          <path d="m6 8 4 4 4-4" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+          <path
+            d="m6 8 4 4 4-4"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
-      </div>
+      </button>
+
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div
+            ref={menuRef}
+            id={listboxID}
+            role="listbox"
+            aria-labelledby={selectID}
+            tabIndex={-1}
+            style={{
+              position: "fixed",
+              top: position.top,
+              left: position.left,
+              width: position.width,
+              maxHeight: position.maxHeight,
+            }}
+            className="z-[100] overflow-y-auto overscroll-contain rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-2xl"
+          >
+            {options.map((option, index) => (
+              <button
+                key={`${option.value}-${index}`}
+                type="button"
+                role="option"
+                aria-selected={option.value === selectedValue}
+                disabled={option.disabled}
+                onMouseEnter={() => {
+                  if (!option.disabled) setActiveIndex(index);
+                }}
+                onClick={() => choose(option)}
+                className={cn(
+                  "flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                  option.disabled && "cursor-not-allowed opacity-40",
+                  !option.disabled &&
+                    index === activeIndex &&
+                    "bg-accent text-accent-foreground",
+                  option.value === selectedValue &&
+                    "font-medium text-primary",
+                )}
+              >
+                <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                {option.value === selectedValue && (
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 20 20"
+                    fill="none"
+                    className="h-4 w-4 shrink-0"
+                  >
+                    <path
+                      d="m4.5 10 3.25 3.25L15.5 5.5"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
