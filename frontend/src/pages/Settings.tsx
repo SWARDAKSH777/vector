@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useAuth } from "../lib/auth";
 import { api, IPInfoTokenStatus, PrivacySettings } from "../lib/api";
 import { AppShell } from "../components/AppShell";
-import { Card, Button, Input } from "../components/ui";
+import { Card, Button, Input, Checkbox } from "../components/ui";
 
 export function SettingsPage() {
   const { user } = useAuth();
@@ -119,7 +119,17 @@ export function SettingsPage() {
       {ipinfoMessage && <p className="text-sm text-success bg-success/10 px-3 py-2 rounded-lg mt-3">{ipinfoMessage}</p>}
     </Card>
     {privacy && <Card><h2 className="font-semibold mb-2">Privacy & Retention</h2><p className="text-xs text-muted-foreground mb-4">Vector pseudonymizes visitor addresses, stores only referrer origins, and honors GPC/DNT. Anonymous hourly totals remain until you delete analytics or the link.</p><div className="space-y-4">
-      <label className="flex items-center justify-between gap-4 text-sm"><span>Collect privacy-preserving analytics</span><input type="checkbox" checked={privacy.analytics_enabled} onChange={(e)=>setPrivacy({...privacy,analytics_enabled:e.target.checked})} /></label>
+      <Checkbox
+              checked={privacy.analytics_enabled}
+              onChange={(checked) =>
+                setPrivacy({
+                  ...privacy,
+                  analytics_enabled: checked,
+                })
+              }
+              label="Collect privacy-preserving analytics"
+              description="Collect pseudonymous browser, device, referrer-origin and coarse country data for eligible clicks."
+            />
       <Input label="Detailed analytics retention (days)" type="number" min={1} max={3650} value={privacy.analytics_retention_days} onChange={(e)=>setPrivacy({...privacy,analytics_retention_days:Number(e.target.value)})} />
       <Input label="Security audit retention (days)" type="number" min={30} max={3650} value={privacy.audit_retention_days} onChange={(e)=>setPrivacy({...privacy,audit_retention_days:Number(e.target.value)})} />
       {privacyMessage && <p className="text-sm text-muted-foreground">{privacyMessage}</p>}

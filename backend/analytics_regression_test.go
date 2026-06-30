@@ -327,26 +327,114 @@ func TestCountryLookupRejectsPrivateAndDocumentationAddresses(t *testing.T) {
 	}
 }
 
-func TestGPCClickKeepsAccurateAggregateWithoutDetailedEvent(t *testing.T) {
+func TestGPCClickKeepsAggregateAndAnonymousPrivacyEvent(t *testing.T) {
 	s, uid := newRegressionServer(t)
-	res, err := s.db.Exec(`INSERT INTO links(user_id,short_code,destination_url,domain,status) VALUES(?,?,?,?, 'active')`, uid, "private", "https://example.org", "primary.example.com")
+	s.setConfig("analytics_enabled", "true")
+
+	res, err := s.db.Exec(
+		`INSERT INTO links(user_id,short_code,destination_url,domain,status)
+		 VALUES(?,?,?,?, 'active')`,
+		uid,
+		"private",
+		"https://example.org",
+		"primary.example.com",
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	linkID, _ := res.LastInsertId()
-	r := httptest.NewRequest(http.MethodGet, "https://primary.example.com/private", nil)
+
+	r := httptest.NewRequest(
+		http.MethodGet,
+		"https://primary.example.com/private",
+		nil,
+	)
 	r.Header.Set("Sec-GPC", "1")
+	r.Header.Set("User-Agent", "Mozilla/5.0 Brave/1.90")
+	r.Header.Set("Referer", "https://private.example/secret")
+
 	w := httptest.NewRecorder()
 	s.logClickAndRedirect(w, r, linkID, "https://example.org")
+
 	if w.Code != http.StatusFound {
 		t.Fatalf("redirect status=%d", w.Code)
 	}
+
 	var visible, lifetime, rollup, events int64
-	_ = s.db.QueryRow(`SELECT click_count,lifetime_click_count FROM links WHERE id=?`, linkID).Scan(&visible, &lifetime)
-	_ = s.db.QueryRow(`SELECT COALESCE(SUM(click_count),0) FROM click_rollups WHERE link_id=?`, linkID).Scan(&rollup)
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM analytics_events WHERE link_id=?`, linkID).Scan(&events)
-	if visible != 1 || lifetime != 1 || rollup != 1 || events != 0 {
-		t.Fatalf("visible=%d lifetime=%d rollup=%d events=%d", visible, lifetime, rollup, events)
+
+	if err := s.db.QueryRow(
+		`SELECT click_count,lifetime_click_count FROM links WHERE id=?`,
+		linkID,
+	).Scan(&visible, &lifetime); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COALESCE(SUM(click_count),0)
+		 FROM click_rollups WHERE link_id=?`,
+		linkID,
+	).Scan(&rollup); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM analytics_events WHERE link_id=?`,
+		linkID,
+	).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+
+	if visible != 1 || lifetime != 1 || rollup != 1 || events != 1 {
+		t.Fatalf(
+			"visible=%d lifetime=%d rollup=%d events=%d, want 1/1/1/1",
+			visible,
+			lifetime,
+			rollup,
+			events,
+		)
+	}
+
+	var visitorHash, country, referrer, device, browser, operatingSystem string
+
+	if err := s.db.QueryRow(`
+		SELECT
+			COALESCE(visitor_hash,''),
+			COALESCE(country_code,''),
+			COALESCE(referrer,''),
+			COALESCE(device,''),
+			COALESCE(browser,''),
+			COALESCE(operating_system,'')
+		FROM analytics_events
+		WHERE link_id=?
+	`, linkID).Scan(
+		&visitorHash,
+		&country,
+		&referrer,
+		&device,
+		&browser,
+		&operatingSystem,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if visitorHash != "" || country != "" {
+		t.Fatalf(
+			"privacy event retained visitor or country data: visitor=%q country=%q",
+			visitorHash,
+			country,
+		)
+	}
+
+	for label, value := range map[string]string{
+		"referrer":         referrer,
+		"device":           device,
+		"browser":          browser,
+		"operating system": operatingSystem,
+	} {
+		if value != "Privacy-protected" {
+			t.Fatalf("%s=%q, want Privacy-protected", label, value)
+		}
 	}
 }
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## Analytics privacy buckets, link-limit fix, and unified controls
+
+- Added explicit `Other` and `Privacy-protected` browser categories.
+- GPC and DNT traffic now creates only an anonymous privacy-protected event.
+- Privacy-protected traffic stores no visitor identifier, country, client IP,
+  real referrer, or user-agent-derived classification.
+- Unique visitors, repeat rate, and geo coverage exclude privacy-protected
+  traffic.
+- Fixed edit-link requests sending `max_clicks` together with
+  `clear_max_clicks=true`.
+- Prevented contradictory password and expiry clearing values.
+- Added shared styled Checkbox, Select, and Toggle controls.
+- Removed raw checkbox and select controls from application pages.
+- Updated analytics regression coverage and privacy documentation.
+
+
 ## 6.0.0-rc8 — purge verification and release-warning correction
 
 - Fixed the total-purge script silently ignoring `userdel` and `groupdel`

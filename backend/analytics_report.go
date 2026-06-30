@@ -42,6 +42,8 @@ type analyticsFilterPayload struct {
 type analyticsOverview struct {
 	TotalClicks              int64   `json:"total_clicks"`
 	DetailedClicks           int64   `json:"detailed_clicks"`
+	IdentifiedClicks         int64   `json:"identified_clicks"`
+	PrivacyProtectedClicks   int64   `json:"privacy_protected_clicks"`
 	AllTimeClicks            int64   `json:"all_time_clicks"`
 	TotalClicksDelta         float64 `json:"total_clicks_delta"`
 	DeltaAvailable           bool    `json:"delta_available"`
@@ -350,7 +352,17 @@ func resolveAnalyticsStart(ctx context.Context, tx *sql.Tx, uid int64, filter an
 func (s *server) loadAnalyticsOverview(ctx context.Context, tx *sql.Tx, uid int64, filter analyticsFilter) (analyticsOverview, error) {
 	var out analyticsOverview
 	where, args := filter.eventWhere(uid, &filter.Start, &filter.End)
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),COUNT(DISTINCT NULLIF(c.visitor_hash,'')) FROM analytics_events c JOIN links l ON l.id=c.link_id WHERE `+where, args...).Scan(&out.DetailedClicks, &out.UniqueVisitors); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT
+		COUNT(*),
+		COUNT(CASE WHEN NULLIF(c.visitor_hash,'') IS NOT NULL THEN 1 END),
+		COUNT(CASE WHEN c.browser='Privacy-protected' THEN 1 END),
+		COUNT(DISTINCT NULLIF(c.visitor_hash,''))
+		FROM analytics_events c JOIN links l ON l.id=c.link_id WHERE `+where, args...).Scan(
+		&out.DetailedClicks,
+		&out.IdentifiedClicks,
+		&out.PrivacyProtectedClicks,
+		&out.UniqueVisitors,
+	); err != nil {
 		return out, err
 	}
 	if filter.usesEventDimensions() {
@@ -401,7 +413,7 @@ func (s *server) loadAnalyticsOverview(ctx context.Context, tx *sql.Tx, uid int6
 	if out.RangeDays > 0 {
 		out.AverageDailyClicks = round1(float64(out.TotalClicks) / float64(out.RangeDays))
 	}
-	out.RepeatClickRate = repeatClickRate(out.DetailedClicks, out.UniqueVisitors)
+	out.RepeatClickRate = repeatClickRate(out.IdentifiedClicks, out.UniqueVisitors)
 	if out.TotalClicks > 0 {
 		out.DetailedCoverage = round1(float64(out.DetailedClicks) / float64(out.TotalClicks) * 100)
 	}
@@ -536,7 +548,7 @@ func loadAnalyticsGeo(ctx context.Context, tx *sql.Tx, uid int64, filter analyti
 	if err := rows.Close(); err != nil {
 		return out, err
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(CASE WHEN c.country_code<>'' THEN 1 END),COUNT(*) FROM analytics_events c JOIN links l ON l.id=c.link_id WHERE `+w, a...).Scan(&out.LocatedClicks, &out.TotalClicks); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(CASE WHEN c.country_code<>'' THEN 1 END),COUNT(CASE WHEN c.browser<>'Privacy-protected' THEN 1 END) FROM analytics_events c JOIN links l ON l.id=c.link_id WHERE `+w, a...).Scan(&out.LocatedClicks, &out.TotalClicks); err != nil {
 		return out, err
 	}
 	if out.TotalClicks > 0 {

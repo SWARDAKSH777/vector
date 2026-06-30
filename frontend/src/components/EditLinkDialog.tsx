@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { api, type Link } from "../lib/api";
-import { Modal, Button, Input, Textarea, Select } from "./ui";
+import { Modal, Button, Input, Textarea, Select, Checkbox } from "./ui";
 
 interface Props { link: Link | null; onClose: () => void; onUpdated: (link: Link) => void; }
 
@@ -36,11 +36,11 @@ export function EditLinkDialog({ link, onClose, onUpdated }: Props) {
     try {
       const updated = await api.updateLink(link.id, {
         destination_url: dest, tag, notes,
-        password: password || undefined, clear_password: clearPassword,
-        expires_in: expiresIn || undefined,
-        expires_at: !expiresIn && customExpiry ? customExpiry : undefined,
+        password: clearPassword ? undefined : (password || undefined), clear_password: clearPassword,
+        expires_in: clearExpiry ? undefined : (expiresIn || undefined),
+        expires_at: clearExpiry ? undefined : (!expiresIn && customExpiry ? customExpiry : undefined),
         clear_expiry: clearExpiry,
-        max_clicks: maxClicks ? parseInt(maxClicks) : undefined,
+        max_clicks: clearMaxClicks ? undefined : (maxClicks ? parseInt(maxClicks, 10) : undefined),
         clear_max_clicks: clearMaxClicks,
       });
       onUpdated(updated); onClose();
@@ -61,10 +61,15 @@ export function EditLinkDialog({ link, onClose, onUpdated }: Props) {
         {/* Password */}
         <div className="space-y-2">
           {link?.has_password && (
-            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-              <input type="checkbox" checked={clearPassword} onChange={(e) => setClearPassword(e.target.checked)} className="rounded" />
-              Remove existing password
-            </label>
+            <Checkbox
+            checked={clearPassword}
+            onChange={(checked) => {
+              setClearPassword(checked);
+              if (checked) setPassword("");
+            }}
+            label="Remove existing password"
+            description="The link will no longer require a password."
+          />
           )}
           {!clearPassword && (
             <Input label={link?.has_password ? "Replace password" : "Password (optional)"} type="password"
@@ -75,10 +80,18 @@ export function EditLinkDialog({ link, onClose, onUpdated }: Props) {
         {/* Expiry */}
         <div className="space-y-2">
           {link?.expires_at && (
-            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-              <input type="checkbox" checked={clearExpiry} onChange={(e) => setClearExpiry(e.target.checked)} className="rounded" />
-              Remove expiry date
-            </label>
+            <Checkbox
+            checked={clearExpiry}
+            onChange={(checked) => {
+              setClearExpiry(checked);
+              if (checked) {
+                setExpiresIn("");
+                setCustomExpiry("");
+              }
+            }}
+            label="Remove expiry date"
+            description="The link will remain available until paused or deleted."
+          />
           )}
           {!clearExpiry && (
             <div className="space-y-2">
@@ -101,10 +114,15 @@ export function EditLinkDialog({ link, onClose, onUpdated }: Props) {
         {/* Max clicks */}
         <div className="space-y-2">
           {link?.max_clicks && (
-            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-              <input type="checkbox" checked={clearMaxClicks} onChange={(e) => setClearMaxClicks(e.target.checked)} className="rounded" />
-              Remove click limit (current: {link.max_clicks})
-            </label>
+            <Checkbox
+            checked={clearMaxClicks}
+            onChange={(checked) => {
+              setClearMaxClicks(checked);
+              if (checked) setMaxClicks("");
+            }}
+            label={`Remove click limit (current: ${link.max_clicks})`}
+            description="The link will no longer stop after a fixed number of visits."
+          />
           )}
           {!clearMaxClicks && (
             <Input label="Max clicks" type="number" min="1" value={maxClicks}

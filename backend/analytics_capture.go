@@ -23,10 +23,17 @@ type analyticsCapture struct {
 
 func (s *server) prepareAnalyticsCapture(r *http.Request) analyticsCapture {
 	capture := analyticsCapture{}
-	if s.getConfig("analytics_enabled") != "true" || privacySignalOptOut(r) {
+	if s.getConfig("analytics_enabled") != "true" {
 		return capture
 	}
 	capture.Enabled = true
+	if privacySignalOptOut(r) {
+		capture.Referrer = "Privacy-protected"
+		capture.Device = "Privacy-protected"
+		capture.Browser = "Privacy-protected"
+		capture.OS = "Privacy-protected"
+		return capture
+	}
 	classification := classifyClient(r)
 	capture.Device = classification.Device
 	capture.Browser = classification.Browser

@@ -21,7 +21,7 @@ This document describes the software defaults. The operator remains responsible 
 
 For each accepted human GET redirect, Vector increments a link-level visible counter and an anonymous hourly aggregate. These aggregates contain only link ID, UTC hour, and count. They do not contain an IP address, visitor identifier, user agent, referrer, or location. HEAD requests, browser prefetch/prerender requests, and recognized search/social preview crawlers are excluded.
 
-When detailed analytics are enabled and the request does not assert Global Privacy Control or Do Not Track, Vector may additionally retain:
+When detailed analytics are enabled, ordinary requests may additionally retain:
 
 - Click timestamp.
 - Device and browser category derived from the user agent; the raw user-agent string is not retained.
@@ -57,9 +57,8 @@ Vector itself does not choose hosting, DNS, certificate, backup, or monitoring p
 
 ## Analytics v2 event storage
 
-New click analytics use the `analytics_events` table. It stores a link ID, UTC
-time, HMAC-based anonymous visitor fingerprint, origin-only referrer, coarse
-device/browser/operating-system labels, and an optional two-letter country code.
-It does not store raw IP addresses or full user-agent strings. Requests carrying
-Global Privacy Control or Do Not Track are excluded from detailed analytics but
-remain in anonymous aggregate click totals. Country resolution uses a verified Cloudflare country header when available. Otherwise it may send the transient public IP to the configured IPinfo Lite fallback and stores only the resulting country code.
+New click analytics use the `analytics_events` table. For ordinary requests it stores a link ID, UTC time, HMAC-based pseudonymous visitor value, origin-only referrer, coarse device/browser/operating-system labels, and an optional two-letter country code. It does not store raw IP addresses or full user-agent strings.
+
+Requests carrying Global Privacy Control or Do Not Track store only the link ID, UTC time, and fixed `Privacy-protected` labels; their visitor hash, client IP, country, real referrer, and user-agent classification remain empty. They are excluded from unique-visitor, repeat-rate, and geo calculations.
+
+Country resolution uses a verified Cloudflare country header when available. Otherwise it may send the transient public IP to the configured IPinfo Lite fallback and stores only the resulting country code.

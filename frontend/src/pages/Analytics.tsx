@@ -63,7 +63,12 @@ export function AnalyticsPage() {
   const overview = report?.overview;
   const geo = report?.geo;
   const options = report?.options;
+  const browserOptions = useMemo(
+    () => Array.from(new Set([...(options?.browsers ?? []), "Other", "Privacy-protected"])).sort(),
+    [options?.browsers],
+  );
   const analyticsUsable = Boolean(overview?.analytics_enabled);
+  const audienceUsable = analyticsUsable && (overview?.identified_clicks ?? 0) > 0;
   const hasDetailedEvents = (overview?.detailed_clicks ?? 0) > 0;
   const maxHourClicks = Math.max(0, ...(report?.hours ?? []).map((h) => h.clicks));
   const peakHour = maxHourClicks > 0
@@ -134,7 +139,7 @@ export function AnalyticsPage() {
             </Select>
             <Select label="Browser" value={browser} onChange={(e) => setBrowser(e.target.value)}>
               <option value="">All browsers</option>
-              {(options?.browsers ?? []).map((b) => <option key={b} value={b}>{b}</option>)}
+              {browserOptions.map((b) => <option key={b} value={b}>{b}</option>)}
             </Select>
             <Select label="Referrer" value={referrer} onChange={(e) => setReferrer(e.target.value)}>
               <option value="">All referrers</option>
@@ -177,7 +182,16 @@ export function AnalyticsPage() {
                 in Settings.
               </Notice>
             )}
-            {overview?.analytics_enabled && hasDetailedEvents
+            {analyticsUsable && (overview?.privacy_protected_clicks ?? 0) > 0 && (
+        <Notice>
+          {formatNumber(overview?.privacy_protected_clicks ?? 0)} click
+          {(overview?.privacy_protected_clicks ?? 0) === 1 ? "" : "s"} honored GPC or DNT.
+          They are grouped as Privacy-protected without a visitor identifier, IP-derived
+          country, real referrer, or user-agent classification.
+        </Notice>
+      )}
+
+      {overview?.analytics_enabled && hasDetailedEvents
               && (geo?.total_clicks ?? 0) > 0
               && (geo?.located_clicks ?? 0) === 0 && (
               <Notice>
@@ -197,12 +211,28 @@ export function AnalyticsPage() {
             )}
 
             {/* ── KPI cards ── */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 sm:gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8 gap-3 sm:gap-4">
               <MetricCard icon={MousePointerClick} label="All clicks" value={formatNumber(overview?.all_time_clicks ?? 0)} hint="Current link counters" />
               <MetricCard icon={CalendarRange} label="Clicks in range" value={formatNumber(overview?.total_clicks ?? 0)} hint={overview?.data_mode === "detailed" ? "Filtered detailed events" : "Complete aggregate count"} />
-              <MetricCard icon={Users} label="Unique visitors" value={analyticsUsable ? formatNumber(overview?.unique_visitors ?? 0) : "N/A"} hint="Anonymous deduplication" />
+              <MetricCard
+        icon={Users}
+        label="Unique visitors"
+        value={audienceUsable ? formatNumber(overview?.unique_visitors ?? 0) : "N/A"}
+        hint={`${formatNumber(overview?.identified_clicks ?? 0)} eligible clicks`}
+      />
               <MetricCard icon={Activity} label="Daily average" value={String(overview?.avg_daily_clicks ?? 0)} hint={`${overview?.range_days ?? 0} calendar days`} />
-              <MetricCard icon={Repeat2} label="Repeat rate" value={analyticsUsable ? `${overview?.repeat_click_rate ?? 0}%` : "N/A"} hint="Repeat detailed visits" />
+              <MetricCard
+        icon={Repeat2}
+        label="Repeat rate"
+        value={audienceUsable ? `${overview?.repeat_click_rate ?? 0}%` : "N/A"}
+        hint="Among identifiable detailed clicks only"
+      />
+      <MetricCard
+        icon={ShieldCheck}
+        label="Privacy-protected"
+        value={analyticsUsable ? formatNumber(overview?.privacy_protected_clicks ?? 0) : "N/A"}
+        hint="GPC/DNT; no visitor ID or geo"
+      />
               <MetricCard icon={DatabaseZap} label="Detail coverage" value={analyticsUsable ? `${overview?.detailed_coverage ?? 0}%` : "N/A"} hint={`${formatNumber(overview?.detailed_clicks ?? 0)} captured events`} />
               <MetricCard icon={Globe2} label="Geo coverage" value={analyticsUsable ? `${geo?.coverage ?? 0}%` : "N/A"} hint={`${formatNumber(geo?.located_clicks ?? 0)} country matches`} />
             </div>
@@ -338,7 +368,7 @@ export function AnalyticsPage() {
               <Card>
                 <p className="font-semibold mb-1">Browsers</p>
                 <p className="text-xs text-muted-foreground mb-4">
-                  Chrome, Safari, Edge, Firefox, Brave and others
+                  Known browsers, Other, and anonymous Privacy-protected traffic
                 </p>
                 {report.browsers.length === 0 ? (
                   <EmptyPanel
@@ -440,13 +470,13 @@ export function AnalyticsPage() {
               <Info className="w-4 h-4 shrink-0 mt-0.5" />
               <span>
                 <strong className="text-foreground">How counts work:</strong> complete clicks come from
-                transactional hourly rollups. Browser, device, country and unique visitors come from
-                privacy-preserving detailed events captured in the same click transaction. Visitors
-                sending Global Privacy Control or Do Not Track are excluded from detailed analytics,
-                while their aggregate click is still counted. Brave and other privacy-focused browsers
-                may strip referrer headers entirely — those visits appear as "Direct". Verified
-                Cloudflare countries are stored immediately; IPinfo runs asynchronously only as a
-                fallback. Raw IP addresses are never saved.
+        transactional hourly rollups. Unknown browsers are grouped as "Other". Requests carrying
+        Global Privacy Control or Do Not Track create only an anonymous "Privacy-protected" event:
+        no visitor hash, client IP, country, real referrer, device, browser, or operating-system
+        classification is retained. Those events count toward click and browser totals but are
+        excluded from unique visitors, repeat rate, and geo coverage. Verified Cloudflare
+        countries are stored immediately for eligible traffic; IPinfo runs asynchronously only
+        as a fallback. Raw IP addresses are never saved.
               </span>
             </div>
           </>
