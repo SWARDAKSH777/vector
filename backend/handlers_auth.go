@@ -61,7 +61,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not verify credentials")
 		return
 	}
-	if errors.Is(queryErr, sql.ErrNoRows) || !valid || role != "admin" || disabled != 0 {
+	if errors.Is(queryErr, sql.ErrNoRows) || !valid || (role != roleSystemAdmin && role != roleUser) || disabled != 0 {
 		s.audit(r, 0, "auth.login.failed", "user", "", map[string]any{"email_hash": accountKey})
 		writeErr(w, http.StatusUnauthorized, "invalid email or password")
 		return
@@ -79,6 +79,7 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not create session")
 		return
 	}
+	_, _ = s.db.Exec(`UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?`, id)
 	s.audit(r, id, "auth.login.succeeded", "user", idString(id), nil)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -97,8 +98,10 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	uid := userIDFromCtx(r.Context())
-	var email string
-	err := s.db.QueryRow(`SELECT email FROM users WHERE id = ?`, uid).Scan(&email)
+	var email, displayName, role string
+	var forcePasswordChange bool
+	err := s.db.QueryRow(`SELECT email,display_name,role,force_password_change FROM users WHERE id=? AND deleted_at IS NULL`, uid).
+		Scan(&email, &displayName, &role, &forcePasswordChange)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeErr(w, http.StatusNotFound, "user not found")
 		return
@@ -107,7 +110,13 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not load user")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": uid, "email": email, "role": "admin"})
+	mode, modeErr := s.deploymentMode()
+	if modeErr != nil {
+		writeErr(w, http.StatusServiceUnavailable, "deployment mode is temporarily unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": uid, "email": email, "display_name": displayName,
+		"role": role, "deployment_mode": mode, "force_password_change": forcePasswordChange})
 }
 
 type updatePasswordRequest struct {
@@ -160,7 +169,7 @@ func (s *server) handleUpdatePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err = tx.Exec(
-		`UPDATE users SET password_hash=?, password_changed_at=CURRENT_TIMESTAMP WHERE id=?`,
+		`UPDATE users SET password_hash=?, password_changed_at=CURRENT_TIMESTAMP, force_password_change=0 WHERE id=?`,
 		newHash, uid,
 	); err == nil {
 		_, err = tx.Exec(`DELETE FROM sessions WHERE user_id=?`, uid)
