@@ -60,13 +60,19 @@ CREATE TABLE IF NOT EXISTS config (
 );
 
 CREATE TABLE IF NOT EXISTS users (
-	id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-	email               TEXT UNIQUE NOT NULL,
-	password_hash       TEXT NOT NULL,
-	password_changed_at DATETIME,
-	role                TEXT NOT NULL DEFAULT 'disabled',
-	disabled            INTEGER NOT NULL DEFAULT 1,
-	created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+	id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+	email                 TEXT UNIQUE NOT NULL,
+	display_name          TEXT NOT NULL DEFAULT '',
+	password_hash         TEXT NOT NULL,
+	password_changed_at   DATETIME,
+	role                  TEXT NOT NULL DEFAULT 'disabled',
+	disabled              INTEGER NOT NULL DEFAULT 1,
+	force_password_change INTEGER NOT NULL DEFAULT 0,
+	links_suspended       INTEGER NOT NULL DEFAULT 0,
+	deleted_at            DATETIME,
+	default_domain_id     INTEGER,
+	last_login_at         DATETIME,
+	created_at            DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -76,6 +82,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 	last_seen_at    DATETIME NOT NULL,
 	expires_at      DATETIME NOT NULL,
 	user_agent_hash TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS activation_tokens (
+	token_hash TEXT PRIMARY KEY,
+	user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	expires_at DATETIME NOT NULL,
+	used_at    DATETIME,
+	created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS domains (
@@ -88,12 +102,26 @@ CREATE TABLE IF NOT EXISTS domains (
 	cloudflare_token_enc     TEXT,
 	proxied                  INTEGER DEFAULT 0,
 	is_default               INTEGER NOT NULL DEFAULT 0,
+	scope                    TEXT NOT NULL DEFAULT 'private',
+	shared_access            TEXT NOT NULL DEFAULT 'selected_users',
+	ever_shared              INTEGER NOT NULL DEFAULT 0,
 	created_at               DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS domain_access (
+	domain_id    INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+	user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	access_level TEXT NOT NULL DEFAULT 'use',
+	status       TEXT NOT NULL DEFAULT 'active',
+	granted_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+	created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(domain_id,user_id)
 );
 
 CREATE TABLE IF NOT EXISTS links (
 	id              INTEGER PRIMARY KEY AUTOINCREMENT,
 	user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	domain_id       INTEGER REFERENCES domains(id) ON DELETE RESTRICT,
 	short_code      TEXT NOT NULL,
 	destination_url TEXT NOT NULL,
 	domain          TEXT NOT NULL DEFAULT '',
@@ -217,6 +245,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_dns_domain_hostname ON managed_dns
 		{"users", "password_changed_at", `ALTER TABLE users ADD COLUMN password_changed_at DATETIME`},
 		{"users", "role", `ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'disabled'`},
 		{"users", "disabled", `ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 1`},
+		{"users", "display_name", `ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`},
+		{"users", "force_password_change", `ALTER TABLE users ADD COLUMN force_password_change INTEGER NOT NULL DEFAULT 0`},
+		{"users", "links_suspended", `ALTER TABLE users ADD COLUMN links_suspended INTEGER NOT NULL DEFAULT 0`},
+		{"users", "deleted_at", `ALTER TABLE users ADD COLUMN deleted_at DATETIME`},
+		{"users", "default_domain_id", `ALTER TABLE users ADD COLUMN default_domain_id INTEGER`},
+		{"users", "last_login_at", `ALTER TABLE users ADD COLUMN last_login_at DATETIME`},
+		{"domains", "scope", `ALTER TABLE domains ADD COLUMN scope TEXT NOT NULL DEFAULT 'private'`},
+		{"domains", "shared_access", `ALTER TABLE domains ADD COLUMN shared_access TEXT NOT NULL DEFAULT 'selected_users'`},
+		{"domains", "ever_shared", `ALTER TABLE domains ADD COLUMN ever_shared INTEGER NOT NULL DEFAULT 0`},
+		{"links", "domain_id", `ALTER TABLE links ADD COLUMN domain_id INTEGER REFERENCES domains(id) ON DELETE RESTRICT`},
 		{"links", "redirect_type", `ALTER TABLE links ADD COLUMN redirect_type TEXT NOT NULL DEFAULT 'slug'`},
 		{"links", "notes", `ALTER TABLE links ADD COLUMN notes TEXT DEFAULT ''`},
 		{"links", "max_clicks", `ALTER TABLE links ADD COLUMN max_clicks INTEGER`},
@@ -251,34 +289,85 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_dns_domain_hostname ON managed_dns
 	if _, err := db.Exec(`UPDATE users SET password_changed_at=COALESCE(password_changed_at, created_at, CURRENT_TIMESTAMP)`); err != nil {
 		log.Fatalf("backfill password change timestamps: %v", err)
 	}
-	var authzMigration string
-	authzErr := db.QueryRow(`SELECT value FROM config WHERE key='admin_authorization_v1'`).Scan(&authzMigration)
-	if authzErr == sql.ErrNoRows {
-		tx, err := db.Begin()
-		if err != nil {
-			log.Fatalf("begin authorization migration: %v", err)
-		}
-		if _, err = tx.Exec(`UPDATE users SET role='disabled', disabled=1`); err == nil {
-			_, err = tx.Exec(`UPDATE users SET role='admin', disabled=0 WHERE id=(SELECT MIN(id) FROM users)`)
-		}
-		if err == nil {
-			_, err = tx.Exec(`DELETE FROM sessions WHERE user_id NOT IN (SELECT id FROM users WHERE role='admin' AND disabled=0)`)
-		}
-		if err == nil {
-			_, err = tx.Exec(`INSERT INTO config(key,value) VALUES('admin_authorization_v1','done')`)
-		}
-		if err != nil {
-			_ = tx.Rollback()
-			log.Fatalf("apply authorization migration: %v", err)
-		}
-		if err := tx.Commit(); err != nil {
-			log.Fatalf("commit authorization migration: %v", err)
-		}
-	} else if authzErr != nil {
-		log.Fatalf("inspect authorization migration state: %v", authzErr)
+	// Tenancy v2 deliberately removes the historical one-active-admin invariant.
+	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_users_single_admin`); err != nil {
+		log.Fatalf("remove single-administrator invariant: %v", err)
 	}
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_admin ON users(role) WHERE role='admin' AND disabled=0`); err != nil {
-		log.Fatalf("enforce one active administrator: %v", err)
+	if _, err := db.Exec(`UPDATE users SET role='system_admin' WHERE role='admin'`); err != nil {
+		log.Fatalf("migrate administrator role: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE users SET role='system_admin',disabled=0
+		WHERE id=(SELECT MIN(id) FROM users)
+		AND NOT EXISTS(SELECT 1 FROM users WHERE role='system_admin')`); err != nil {
+		log.Fatalf("select initial system administrator: %v", err)
+	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO config(key,value) VALUES('deployment_mode','single')`); err != nil {
+		log.Fatalf("seed deployment mode: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE links SET domain_id=(
+		SELECT d.id FROM domains d WHERE d.hostname=links.domain COLLATE NOCASE LIMIT 1
+	) WHERE domain_id IS NULL AND domain<>''`); err != nil {
+		log.Fatalf("backfill link domain ids: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE users SET default_domain_id=(
+		SELECT d.id FROM domains d WHERE d.user_id=users.id AND d.is_default=1 ORDER BY d.id LIMIT 1
+	) WHERE default_domain_id IS NULL`); err != nil {
+		log.Fatalf("backfill per-user default domains: %v", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_links_domainid_type_code
+		ON links(domain_id,redirect_type,short_code COLLATE BINARY) WHERE domain_id IS NOT NULL`); err != nil {
+		log.Fatalf("enforce domain-id alias uniqueness: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_domain_access_user ON domain_access(user_id,status)`); err != nil {
+		log.Fatalf("create domain-access user index: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_links_domain_owner ON links(domain_id,user_id)`); err != nil {
+		log.Fatalf("create domain ownership index: %v", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_activation_tokens_expiry ON activation_tokens(expires_at)`); err != nil {
+		log.Fatalf("create activation-token expiry index: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_domains_shared_irreversible
+		BEFORE UPDATE OF scope,ever_shared ON domains
+		WHEN OLD.ever_shared=1 AND (NEW.ever_shared<>1 OR NEW.scope<>'shared')
+		BEGIN SELECT RAISE(ABORT,'shared domain cannot become private'); END`); err != nil {
+		log.Fatalf("enforce irreversible shared domains: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_domains_shared_update_invariant
+		BEFORE UPDATE OF scope,ever_shared ON domains
+		WHEN (NEW.scope='shared' AND NEW.ever_shared<>1) OR (NEW.ever_shared=1 AND NEW.scope<>'shared')
+		BEGIN SELECT RAISE(ABORT,'shared domain state is invalid'); END`); err != nil {
+		log.Fatalf("enforce shared-domain update invariant: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_domains_shared_insert_invariant
+		BEFORE INSERT ON domains
+		WHEN (NEW.scope='shared' AND NEW.ever_shared<>1) OR (NEW.ever_shared=1 AND NEW.scope<>'shared')
+		BEGIN SELECT RAISE(ABORT,'shared domain state is invalid'); END`); err != nil {
+		log.Fatalf("enforce shared-domain insert invariant: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_domains_validate_insert
+		BEFORE INSERT ON domains
+		WHEN NEW.scope NOT IN ('private','shared') OR NEW.shared_access NOT IN ('selected_users','all_users')
+		BEGIN SELECT RAISE(ABORT,'invalid domain sharing state'); END`); err != nil {
+		log.Fatalf("validate domain sharing inserts: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_domains_validate_update
+		BEFORE UPDATE OF scope,shared_access ON domains
+		WHEN NEW.scope NOT IN ('private','shared') OR NEW.shared_access NOT IN ('selected_users','all_users')
+		BEGIN SELECT RAISE(ABORT,'invalid domain sharing state'); END`); err != nil {
+		log.Fatalf("validate domain sharing updates: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_domain_access_validate_insert
+		BEFORE INSERT ON domain_access
+		WHEN NEW.access_level NOT IN ('use','manage') OR NEW.status NOT IN ('active','frozen')
+		BEGIN SELECT RAISE(ABORT,'invalid domain access state'); END`); err != nil {
+		log.Fatalf("validate domain-access inserts: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS trg_domain_access_validate_update
+		BEFORE UPDATE OF access_level,status ON domain_access
+		WHEN NEW.access_level NOT IN ('use','manage') OR NEW.status NOT IN ('active','frozen')
+		BEGIN SELECT RAISE(ABORT,'invalid domain access state'); END`); err != nil {
+		log.Fatalf("validate domain-access updates: %v", err)
 	}
 	if err := migrateAnalyticsV2(db); err != nil {
 		log.Fatalf("migrate analytics v2: %v", err)
@@ -354,6 +443,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_dns_domain_hostname ON managed_dns
 		"analytics_enabled":        "true",
 		"analytics_retention_days": "90",
 		"audit_retention_days":     "365",
+		"deployment_mode":          "single",
+		"max_users":                "0",
+		"max_links_per_user":       "0",
+		"max_private_domains_per_user": "0",
 	}
 	for key, value := range defaults {
 		if _, err := db.Exec(`INSERT OR IGNORE INTO config(key,value) VALUES(?,?)`, key, value); err != nil {
@@ -364,6 +457,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_dns_domain_hostname ON managed_dns
 	// Expired sessions are operational data, not audit evidence. Cleanup is not
 	// required for schema correctness, but a database write failure at startup is
 	// a useful signal that the service should not accept traffic.
+	if _, err := db.Exec(`DELETE FROM activation_tokens WHERE used_at IS NOT NULL OR expires_at <= CURRENT_TIMESTAMP`); err != nil {
+		log.Fatalf("remove expired activation tokens during startup: %v", err)
+	}
 	if _, err := db.Exec(`DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP`); err != nil {
 		log.Fatalf("remove expired sessions during startup: %v", err)
 	}
