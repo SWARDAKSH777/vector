@@ -10,6 +10,7 @@ type Step = "welcome" | "account" | "domain" | "nginx" | "done";
 export function SetupPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState<Step>("welcome");
+  const [deploymentMode, setDeploymentMode] = useState<"single" | "multi">("single");
 
   // installer-generated one-time bootstrap gate
   const [bootstrapLoading, setBootstrapLoading] = useState(true);
@@ -54,6 +55,7 @@ export function SetupPage() {
           navigate("/login", { replace: true });
           return;
         }
+        setDeploymentMode(status.deployment_mode);
         setBootstrapRequired(status.bootstrap_required);
         setBootstrapAuthenticated(status.bootstrap_authenticated);
         setBootstrapAvailable(status.bootstrap_available);
@@ -121,6 +123,7 @@ export function SetupPage() {
         admin_email: email,
         admin_password: password,
         cloudflare_token: cfToken.trim() || undefined,
+        deployment_mode: deploymentMode,
       });
       setFinalDomain(res.domain);
       setStep(res.domain ? "nginx" : "done");
@@ -268,9 +271,18 @@ export function SetupPage() {
                 <ShieldCheck className="w-8 h-8 text-primary" />
               </div>
               <h1 className="text-xl font-bold mb-2">Welcome to Vector</h1>
-              <p className="text-muted-foreground text-sm mb-6 leading-relaxed">
+              <p className="text-muted-foreground text-sm mb-4 leading-relaxed">
                 Self-hosted URL shortener. Setup takes 2 minutes.
               </p>
+              <div className="mb-6 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-left">
+                <p className="text-xs font-medium text-primary uppercase tracking-wide">Installer-selected mode</p>
+                <p className="text-sm font-semibold mt-1">{deploymentMode === "multi" ? "Multi-user tenancy" : "Single-user tenancy"}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {deploymentMode === "multi"
+                    ? "The administrator can manage user accounts, and domain owners can share domain access directly."
+                    : "Only the administrator account can sign in; no user-management panel is exposed."}
+                </p>
+              </div>
               <div className="text-left space-y-3 mb-6">
                 {[
                   "Create your admin account",

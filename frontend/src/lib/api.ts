@@ -107,16 +107,16 @@ function analyticsQuery(filters?: AnalyticsFilters): string {
 }
 
 export const api = {
-  setupStatus: () => req<{ setup_complete: boolean; domain: string; bootstrap_required: boolean; bootstrap_authenticated: boolean; bootstrap_available: boolean; bootstrap_message?: string }>("GET", "/api/setup/status"),
+  setupStatus: () => req<SetupStatus>("GET", "/api/setup/status"),
   bootstrapLogin: async (username: string, password: string) => { const result = await req<{ ok: boolean; expires_in: number }>("POST", "/api/setup/bootstrap/login", { username, password }); clearAPICache(["/api/setup/status"]); return result; },
   bootstrapLogout: async () => { const result = await req<{ ok: boolean }>("POST", "/api/setup/bootstrap/logout"); clearAPICache(["/api/setup/status"]); return result; },
   setupCheckDomain: (domain: string, cloudflareToken?: string, signal?: AbortSignal) => req<{ ok: boolean; error?: string; method?: "cloudflare_api" | "cloudflare_api_pending_dns" | "http_reachability" }>("POST", "/api/setup/check-domain", { domain, cloudflare_token: cloudflareToken || undefined }, signal),
-  setupSubmit: async (data: { domain: string; admin_email: string; admin_password: string; cloudflare_token?: string }) => { const result = await req<{ ok: boolean; domain: string }>("POST", "/api/setup", data); clearAPICache(["/api/setup/status"]); return result; },
+  setupSubmit: async (data: { domain: string; admin_email: string; admin_password: string; cloudflare_token?: string; deployment_mode: "single" | "multi" }) => { const result = await req<{ ok: boolean; domain: string }>("POST", "/api/setup", data); clearAPICache(["/api/setup/status"]); return result; },
   setupNginx: async (domain: string) => { const result = await req<{ ok: boolean; log: string; error?: string; url?: string }>("POST", "/api/setup/nginx", { domain }); clearAPICache(["/api/setup/status", "/api/domains"]); return result; },
 
   login: async (email: string, password: string) => { const result = await req<{ ok: boolean }>("POST", "/api/auth/login", { email, password }); clearAPICache(); return result; },
   logout: async () => { const result = await req<{ ok: boolean }>("POST", "/api/auth/logout"); clearAPICache(); return result; },
-  me: () => cachedGet<{ id: number; email: string }>("/api/auth/me", 60_000),
+  me: () => cachedGet<AuthUser>("/api/auth/me", 60_000),
   updatePassword: (currentPassword: string, newPassword: string) => req<{ ok: boolean }>("POST", "/api/auth/update-password", { current_password: currentPassword, new_password: newPassword }),
 
   getPrivacySettings: () => cachedGet<PrivacySettings>("/api/settings/privacy", 15_000),
@@ -124,7 +124,7 @@ export const api = {
   getIPInfoTokenStatus: () => cachedGet<IPInfoTokenStatus>("/api/settings/ipinfo-token", 15_000),
   saveIPInfoToken: (token: string) => mutate<IPInfoTokenStatus>("PUT", "/api/settings/ipinfo-token", { token }, ["/api/settings/ipinfo-token", "/api/analytics/", "/api/stats/"]),
   deleteIPInfoToken: () => mutate<IPInfoTokenStatus>("DELETE", "/api/settings/ipinfo-token", undefined, ["/api/settings/ipinfo-token", "/api/analytics/", "/api/stats/"]),
-  deleteAnalytics: () => mutate<{ ok: boolean; deleted: number; counters_reset: number }>("DELETE", "/api/settings/analytics", undefined, ["/api/analytics/", "/api/stats/", "/api/links"]),
+  deleteAnalytics: () => mutate<{ ok: boolean; deleted: number; counters_reset: number; geo_cache_reset: boolean }>("DELETE", "/api/settings/analytics", undefined, ["/api/analytics/", "/api/stats/", "/api/links"]),
   dataExportURL: "/api/settings/export",
 
   listLinks: (q?: string, status?: string, limit = 200, offset = 0) => {
@@ -165,6 +165,15 @@ export const api = {
   saveDomainToken: (id: number, token: string) => mutate<Domain>("POST", `/api/domains/${id}/token`, { token }, ["/api/domains"]),
   deleteDomainToken: (id: number) => mutate<Domain>("DELETE", `/api/domains/${id}/token`, undefined, ["/api/domains"]),
   getDomainBlocklist: (id: number, signal?: AbortSignal) => req<string[]>("GET", `/api/domains/${id}/blocklist`, undefined, signal),
+  listDomainMembers: (id: number) => req<DomainMember[]>("GET", `/api/domains/${id}/members`),
+  addDomainMember: (id: number, email: string) => mutate<DomainMember>("POST", `/api/domains/${id}/members`, { email }, ["/api/domains"]),
+  deleteDomainMember: (id: number, userID: number) => mutate<{ ok: boolean }>("DELETE", `/api/domains/${id}/members/${userID}`, undefined, ["/api/domains"]),
+
+  listAdminUsers: () => cachedGet<AdminUser[]>("/api/admin/users", 10_000),
+  createAdminUser: (email: string, password: string) => mutate<AdminUser>("POST", "/api/admin/users", { email, password }, ["/api/admin/users"]),
+  deactivateAdminUser: (id: number) => mutate<{ ok: boolean; content_preserved: boolean }>("DELETE", `/api/admin/users/${id}`, undefined, ["/api/admin/users"]),
+  reactivateAdminUser: (id: number) => mutate<{ ok: boolean }>("POST", `/api/admin/users/${id}/reactivate`, undefined, ["/api/admin/users"]),
+  resetAdminUserPassword: (id: number, password: string) => mutate<{ ok: boolean }>("POST", `/api/admin/users/${id}/reset-password`, { password }, ["/api/admin/users"]),
 };
 
 export interface Link { id: number; short_code: string; short_url: string; destination_url: string; domain: string; redirect_type: "slug" | "subdomain"; tag: string; notes: string; has_password: boolean; expires_at: string | null; max_clicks: number | null; utm_source: string; utm_medium: string; utm_campaign: string; status: "active" | "paused" | "expired"; click_count: number; created_at: string; }
@@ -185,4 +194,8 @@ export interface AnalyticsCaptureHealth { failures: number; healthy: boolean; la
 export interface AnalyticsReport { generated_at: string; schema_version: number; granularity: "day" | "week" | "month"; filters: Required<Pick<AnalyticsFilters, "range">> & Omit<AnalyticsFilters, "range">; overview: StatsOverview; timeseries: TimeseriesPoint[]; geo: GeoResponse; devices: GroupedStat[]; browsers: GroupedStat[]; referrers: ReferrerStat[]; top_links: TopLinkStat[]; hours: HourlyStat[]; options: AnalyticsOptions; capture: AnalyticsCaptureHealth; }
 export interface IPInfoTokenStatus { has_token: boolean; configured: boolean; provider: string; country_only: boolean; }
 export interface PrivacySettings { analytics_enabled: boolean; analytics_retention_days: number; audit_retention_days: number; honors_gpc_and_dnt: boolean; stores_raw_ip: boolean; }
-export interface Domain { id: number; hostname: string; status: "pending" | "active" | "error" | "token_missing"; message: string; has_token: boolean; dns_ready: boolean; proxied: boolean; is_default: boolean; created_at: string; }
+export interface SetupStatus { setup_complete: boolean; domain: string; deployment_mode: "single" | "multi"; multi_user: boolean; bootstrap_required: boolean; bootstrap_authenticated: boolean; bootstrap_available: boolean; bootstrap_message?: string; }
+export interface AuthUser { id: number; email: string; role: "admin" | "user"; deployment_mode: "single" | "multi"; multi_user: boolean; }
+export interface Domain { id: number; owner_id: number; owner_email: string; hostname: string; status: "pending" | "active" | "error" | "token_missing"; message: string; has_token: boolean; dns_ready: boolean; proxied: boolean; is_default: boolean; access_role: "owner" | "member"; can_manage: boolean; created_at: string; }
+export interface DomainMember { user_id: number; email: string; access_role: "owner" | "member"; created_at: string; }
+export interface AdminUser { id: number; email: string; role: "admin" | "user"; disabled: boolean; created_at: string; link_count: number; owned_domains: number; shared_domains: number; }

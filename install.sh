@@ -257,18 +257,120 @@ chown root:vector "$RUNTIME_ENV_FILE"
 chmod 0640 "$RUNTIME_ENV_FILE"
 
 setup_complete=false
+database_deployment_mode=""
 if [[ -f "$DATA_DIR/vector.db" ]]; then
-  setup_complete="$(python3 - "$DATA_DIR/vector.db" <<'__PY_DB__' 2>/dev/null || printf 'false'
+  IFS='|' read -r setup_complete database_deployment_mode < <(python3 - "$DATA_DIR/vector.db" <<'__PY_DB__' 2>/dev/null || printf 'false|\n'
 import sqlite3, sys
 try:
     db=sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
-    row=db.execute("SELECT value FROM config WHERE key='setup_complete'").fetchone()
-    print("true" if row and row[0] == "true" else "false")
+    complete=db.execute("SELECT value FROM config WHERE key='setup_complete'").fetchone()
+    mode=db.execute("SELECT value FROM config WHERE key='deployment_mode'").fetchone()
+    value=(mode[0].strip().lower() if mode and mode[0] else "")
+    print(("true" if complete and complete[0] == "true" else "false") + "|" + value)
 except Exception:
-    print("false")
+    print("false|")
 __PY_DB__
-)"
+)
 fi
+
+normalize_deployment_mode() {
+  case "${1,,}" in
+    single|multi) printf '%s' "${1,,}" ;;
+    *) return 1 ;;
+  esac
+}
+
+requested_deployment_mode=""
+if [[ -n ${VECTOR_DEPLOYMENT_MODE:-} ]]; then
+  requested_deployment_mode="$(normalize_deployment_mode "$VECTOR_DEPLOYMENT_MODE")" || \
+    fail "VECTOR_DEPLOYMENT_MODE must be either 'single' or 'multi'."
+fi
+
+runtime_deployment_mode="$(python3 - "$RUNTIME_ENV_FILE" <<'__READ_RUNTIME_MODE__'
+import pathlib, sys
+path=pathlib.Path(sys.argv[1])
+value=""
+if path.exists():
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if raw.startswith("VECTOR_INITIAL_DEPLOYMENT_MODE="):
+            value=raw.split("=",1)[1].strip().lower()
+print(value if value in {"single","multi"} else "")
+__READ_RUNTIME_MODE__
+)"
+
+choose_deployment_mode() {
+  local choice=""
+  if [[ -t 0 && -t 1 ]]; then
+    printf '\nChoose the Vector tenancy mode:\n' >&2
+    printf '  1) Single-user — only the administrator account can sign in (default)\n' >&2
+    printf '  2) Multi-user  — administrator can create/deactivate users; domain owners can share domains\n' >&2
+    read -r -p 'Selection [1/2]: ' choice
+    case "$choice" in
+      2|multi|MULTI) printf 'multi' ;;
+      ''|1|single|SINGLE) printf 'single' ;;
+      *) fail "Invalid tenancy selection. Enter 1 or 2." ;;
+    esac
+  else
+    warn "No interactive terminal detected; defaulting to single-user mode. Set VECTOR_DEPLOYMENT_MODE=multi for unattended multi-user installation."
+    printf 'single'
+  fi
+}
+
+selected_deployment_mode=""
+if [[ "$setup_complete" == true ]]; then
+  if [[ -n "$requested_deployment_mode" ]]; then
+    selected_deployment_mode="$requested_deployment_mode"
+  elif normalize_deployment_mode "$database_deployment_mode" >/dev/null 2>&1; then
+    selected_deployment_mode="${database_deployment_mode,,}"
+  else
+    log "Selecting tenancy mode for this existing installation"
+    selected_deployment_mode="$(choose_deployment_mode)"
+  fi
+
+  runuser -u vector -- python3 - "$DATA_DIR/vector.db" "$selected_deployment_mode" <<'__WRITE_DEPLOYMENT_MODE__'
+import sqlite3, sys
+path, mode=sys.argv[1:]
+if mode not in {"single","multi"}:
+    raise SystemExit("invalid deployment mode")
+db=sqlite3.connect(path)
+try:
+    db.execute("BEGIN IMMEDIATE")
+    db.execute("INSERT INTO config(key,value) VALUES('deployment_mode',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (mode,))
+    db.commit()
+finally:
+    db.close()
+__WRITE_DEPLOYMENT_MODE__
+else
+  if [[ -n "$requested_deployment_mode" ]]; then
+    selected_deployment_mode="$requested_deployment_mode"
+  elif normalize_deployment_mode "$runtime_deployment_mode" >/dev/null 2>&1; then
+    selected_deployment_mode="${runtime_deployment_mode,,}"
+  else
+    selected_deployment_mode="$(choose_deployment_mode)"
+  fi
+fi
+
+python3 - "$RUNTIME_ENV_FILE" "$setup_complete" "$selected_deployment_mode" <<'__WRITE_RUNTIME_MODE__'
+import os, pathlib, sys, tempfile
+path=pathlib.Path(sys.argv[1]); complete=sys.argv[2] == "true"; mode=sys.argv[3]
+lines=path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+out=[line for line in lines if not line.startswith("VECTOR_INITIAL_DEPLOYMENT_MODE=")]
+if not complete:
+    if out and out[-1] != "": out.append("")
+    out.append(f"VECTOR_INITIAL_DEPLOYMENT_MODE={mode}")
+fd,tmp=tempfile.mkstemp(prefix=".runtime.env.", dir=str(path.parent), text=True)
+try:
+    with os.fdopen(fd,"w",encoding="utf-8",newline="\n") as handle:
+        handle.write("\n".join(out).rstrip("\n")+"\n")
+        handle.flush(); os.fsync(handle.fileno())
+    os.chmod(tmp,0o640); os.replace(tmp,path)
+finally:
+    try: os.unlink(tmp)
+    except FileNotFoundError: pass
+__WRITE_RUNTIME_MODE__
+chown root:vector "$RUNTIME_ENV_FILE"
+chmod 0640 "$RUNTIME_ENV_FILE"
+ok "Tenancy mode: $selected_deployment_mode"
 
 make_bootstrap() {
   BOOTSTRAP_USERNAME="vector-bootstrap-$(openssl rand -hex 4)"

@@ -97,7 +97,7 @@ func TestSetupSubmitCreatesAuthenticatedSession(t *testing.T) {
 		})}
 	}
 	t.Cleanup(func() { setupHTTPClientFactory = oldFactory })
-	r := httptest.NewRequest("POST", "http://129.159.228.8:8080/api/setup", strings.NewReader(`{"domain":"links.example.com","admin_email":"admin@example.com","admin_password":"correct-horse-battery-staple"}`))
+	r := httptest.NewRequest("POST", "http://129.159.228.8:8080/api/setup", strings.NewReader(`{"domain":"links.example.com","admin_email":"admin@example.com","admin_password":"correct-horse-battery-staple","deployment_mode":"single"}`))
 	r.Header.Set("Content-Type", "application/json")
 	r.RemoteAddr = "198.51.100.20:50000"
 	w := httptest.NewRecorder()

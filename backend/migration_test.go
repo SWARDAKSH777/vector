@@ -81,6 +81,21 @@ INSERT INTO clicks(link_id,clicked_at,device,browser) VALUES(1,'2026-06-24 12:59
 	if err := db.QueryRow(`SELECT COUNT(*) FROM domains WHERE is_default=1`).Scan(&defaultCount); err != nil || defaultCount != 1 {
 		t.Fatalf("default domain migration count=%d err=%v", defaultCount, err)
 	}
+	var memberRole string
+	var memberDefault bool
+	if err := db.QueryRow(`SELECT access_role,is_default FROM domain_members WHERE domain_id=1 AND user_id=1`).Scan(&memberRole, &memberDefault); err != nil {
+		t.Fatal(err)
+	}
+	if memberRole != "owner" || !memberDefault {
+		t.Fatalf("owner membership role=%q default=%v, want owner/true", memberRole, memberDefault)
+	}
+	var deploymentMode string
+	if err := db.QueryRow(`SELECT value FROM config WHERE key='deployment_mode'`).Scan(&deploymentMode); err != nil {
+		t.Fatal(err)
+	}
+	if deploymentMode != deploymentModeSingle {
+		t.Fatalf("migrated deployment mode=%q, want %q", deploymentMode, deploymentModeSingle)
+	}
 	if _, err := db.Exec(`INSERT INTO links(user_id,short_code,destination_url,domain,redirect_type) VALUES(1,'docs','https://example.net','example.com','slug')`); err != nil {
 		t.Fatalf("case-distinct slug on the same domain was rejected: %v", err)
 	}

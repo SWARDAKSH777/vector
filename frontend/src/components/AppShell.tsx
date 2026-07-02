@@ -2,12 +2,12 @@ import React, { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Link2, BarChart2, QrCode, Globe,
-  Settings, Bell, LogOut, ChevronDown, Menu, X,
+  Settings, Bell, LogOut, ChevronDown, Menu, X, Users,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { cn } from "../lib/utils";
 
-const NAV = [
+const BASE_NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/links", label: "Links", icon: Link2 },
   { to: "/analytics", label: "Analytics", icon: BarChart2 },
@@ -27,6 +27,10 @@ export function AppShell({ children, search, onSearch }: AppShellProps) {
   const { user, logout } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  const nav = user?.role === "admin" && user.multi_user
+    ? [...BASE_NAV.slice(0, 5), { to: "/admin", label: "Users", icon: Users }, BASE_NAV[5]]
+    : BASE_NAV;
 
   const isActive = (to: string) => to === "/" ? pathname === "/" : pathname.startsWith(to);
 
@@ -62,7 +66,7 @@ export function AppShell({ children, search, onSearch }: AppShellProps) {
 
         {/* Nav */}
         <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto">
-          {NAV.map(({ to, label, icon: Icon }) => (
+          {nav.map(({ to, label, icon: Icon }) => (
             <Link
               key={to}
               to={to}
@@ -137,7 +141,7 @@ export function AppShell({ children, search, onSearch }: AppShellProps) {
                 <div className="absolute right-0 top-full mt-1 z-20 w-52 rounded-xl border border-border bg-card shadow-lg py-1">
                   <div className="px-3 py-2 border-b border-border mb-1">
                     <p className="text-xs font-medium truncate">{user?.email}</p>
-                    <p className="text-xs text-muted-foreground">Administrator</p>
+                    <p className="text-xs text-muted-foreground">{user?.role === "admin" ? "Administrator" : "User"}</p>
                   </div>
                   <Link to="/settings" onClick={() => setUserMenuOpen(false)}
                     className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors">
@@ -160,7 +164,7 @@ export function AppShell({ children, search, onSearch }: AppShellProps) {
 
         {/* Mobile bottom nav */}
         <nav className="lg:hidden border-t border-border bg-card flex items-center justify-around px-2 py-1 shrink-0">
-          {NAV.slice(0, 5).map(({ to, label, icon: Icon }) => (
+          {nav.slice(0, 5).map(({ to, label, icon: Icon }) => (
             <Link
               key={to}
               to={to}

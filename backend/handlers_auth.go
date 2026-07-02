@@ -61,7 +61,13 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not verify credentials")
 		return
 	}
-	if errors.Is(queryErr, sql.ErrNoRows) || !valid || role != "admin" || disabled != 0 {
+	mode, modeErr := s.deploymentModeE()
+	if modeErr != nil {
+		writeErr(w, http.StatusServiceUnavailable, "authentication configuration is temporarily unavailable")
+		return
+	}
+	roleAllowed := role == "admin" || (role == "user" && mode == deploymentModeMulti)
+	if errors.Is(queryErr, sql.ErrNoRows) || !valid || !roleAllowed || disabled != 0 {
 		s.audit(r, 0, "auth.login.failed", "user", "", map[string]any{"email_hash": accountKey})
 		writeErr(w, http.StatusUnauthorized, "invalid email or password")
 		return
@@ -97,8 +103,8 @@ func (s *server) handleLogout(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	uid := userIDFromCtx(r.Context())
-	var email string
-	err := s.db.QueryRow(`SELECT email FROM users WHERE id = ?`, uid).Scan(&email)
+	var email, role string
+	err := s.db.QueryRow(`SELECT email,role FROM users WHERE id = ? AND disabled=0`, uid).Scan(&email, &role)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeErr(w, http.StatusNotFound, "user not found")
 		return
@@ -107,7 +113,14 @@ func (s *server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not load user")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": uid, "email": email, "role": "admin"})
+	mode, modeErr := s.deploymentModeE()
+	if modeErr != nil {
+		writeErr(w, http.StatusServiceUnavailable, "deployment mode is temporarily unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id": uid, "email": email, "role": role, "deployment_mode": mode, "multi_user": mode == deploymentModeMulti,
+	})
 }
 
 type updatePasswordRequest struct {

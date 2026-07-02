@@ -91,6 +91,15 @@ CREATE TABLE IF NOT EXISTS domains (
 	created_at               DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS domain_members (
+	domain_id   INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+	user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+	access_role TEXT NOT NULL CHECK(access_role IN ('owner','member')),
+	is_default  INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
+	created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY(domain_id,user_id)
+);
+
 CREATE TABLE IF NOT EXISTS links (
 	id              INTEGER PRIMARY KEY AUTOINCREMENT,
 	user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -206,6 +215,14 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_id ON audit_logs(actor_id);
 CREATE INDEX IF NOT EXISTS idx_managed_dns_link_id ON managed_dns_records(link_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_dns_domain_hostname ON managed_dns_records(domain_id, hostname);
+CREATE INDEX IF NOT EXISTS idx_domain_members_user ON domain_members(user_id, access_role);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_domain_members_owner ON domain_members(domain_id) WHERE access_role='owner';
+CREATE TRIGGER IF NOT EXISTS trg_domains_owner_membership
+AFTER INSERT ON domains
+BEGIN
+	INSERT OR IGNORE INTO domain_members(domain_id,user_id,access_role,is_default)
+	VALUES(NEW.id,NEW.user_id,'owner',NEW.is_default);
+END;
 `
 	if _, err := db.Exec(schema); err != nil {
 		log.Fatalf("migrate: %v", err)
@@ -326,6 +343,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_dns_domain_hostname ON managed_dns
 		ON domains(user_id) WHERE is_default=1`); err != nil {
 		log.Fatalf("enforce one default domain per user: %v", err)
 	}
+	if _, err := db.Exec(`INSERT OR IGNORE INTO domain_members(domain_id,user_id,access_role,is_default)
+		SELECT id,user_id,'owner',is_default FROM domains`); err != nil {
+		log.Fatalf("backfill domain ownership memberships: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE domain_members SET access_role='owner'
+		WHERE EXISTS (SELECT 1 FROM domains d WHERE d.id=domain_members.domain_id AND d.user_id=domain_members.user_id)`); err != nil {
+		log.Fatalf("repair domain owner memberships: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE domain_members SET is_default=0
+		WHERE is_default=1 AND rowid NOT IN (SELECT MIN(rowid) FROM domain_members WHERE is_default=1 GROUP BY user_id)`); err != nil {
+		log.Fatalf("deduplicate member default domains: %v", err)
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_domain_members_one_default_per_user
+		ON domain_members(user_id) WHERE is_default=1`); err != nil {
+		log.Fatalf("enforce one member default domain per user: %v", err)
+	}
 	if _, err := db.Exec(`DROP INDEX IF EXISTS idx_links_short_code_nocase`); err != nil {
 		log.Fatalf("remove legacy global short-code index: %v", err)
 	}
@@ -351,6 +384,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_dns_domain_hostname ON managed_dns
 	}
 
 	defaults := map[string]string{
+		"deployment_mode":          "single",
 		"analytics_enabled":        "true",
 		"analytics_retention_days": "90",
 		"audit_retention_days":     "365",

@@ -156,9 +156,9 @@ func (s *server) handleCreateLink(w http.ResponseWriter, r *http.Request) {
 	}
 	var domainID int64
 	var domainStatus string
-	if err := s.db.QueryRow(`SELECT id,status FROM domains WHERE user_id=? AND hostname=?`, uid, domain).Scan(&domainID, &domainStatus); err != nil {
+	if err := s.db.QueryRow(`SELECT d.id,d.status FROM domains d JOIN domain_members dm ON dm.domain_id=d.id WHERE dm.user_id=? AND d.hostname=?`, uid, domain).Scan(&domainID, &domainStatus); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			writeErr(w, http.StatusBadRequest, "selected domain does not belong to this account")
+			writeErr(w, http.StatusBadRequest, "selected domain is not available to this account")
 		} else {
 			writeErr(w, http.StatusInternalServerError, "could not validate the selected domain")
 		}
@@ -321,8 +321,9 @@ func newLinkProvisionError(status int, msg string) error {
 
 func (s *server) provisionSubdomainDNS(uid, domainID int64, subdomain, domain string) (*subdomainDNSProvision, error) {
 	var status, tokenEnc string
-	if err := s.db.QueryRow(`SELECT status, COALESCE(cloudflare_token_enc,'') FROM domains
-		WHERE id=? AND user_id=? AND hostname=?`, domainID, uid, domain).Scan(&status, &tokenEnc); err != nil {
+	if err := s.db.QueryRow(`SELECT d.status,COALESCE(d.cloudflare_token_enc,'') FROM domains d
+		JOIN domain_members dm ON dm.domain_id=d.id
+		WHERE d.id=? AND dm.user_id=? AND d.hostname=?`, domainID, uid, domain).Scan(&status, &tokenEnc); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, newLinkProvisionError(http.StatusNotFound, "selected domain was not found")
 		}
@@ -374,7 +375,7 @@ func (s *server) provisionSubdomainDNS(uid, domainID int64, subdomain, domain st
 		}
 		return nil, newLinkProvisionError(statusCode, message+". No link was created.")
 	}
-	if _, err := s.db.Exec(`UPDATE domains SET cloudflare_zone_id=?, status='active' WHERE id=? AND user_id=?`, zone.ID, domainID, uid); err != nil {
+	if _, err := s.db.Exec(`UPDATE domains SET cloudflare_zone_id=?, status='active' WHERE id=?`, zone.ID, domainID); err != nil {
 		// Do not leave an untracked DNS record when local ownership state cannot be
 		// persisted. A later delete would otherwise be unable to clean it up.
 		_ = cf.deleteRecordByID(zone.ID, record.ID)
@@ -681,7 +682,7 @@ func (s *server) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
 	id := atoiOr(r.PathValue("id"), -1)
 	var domain, tokenEnc, zoneID, recordID, previousStatus string
 	err := s.db.QueryRow(`SELECT l.domain, l.status, COALESCE(d.cloudflare_token_enc,''), COALESCE(m.zone_id,''), COALESCE(m.record_id,'')
-		FROM links l LEFT JOIN domains d ON d.hostname=l.domain AND d.user_id=l.user_id
+		FROM links l LEFT JOIN domains d ON d.hostname=l.domain COLLATE NOCASE
 		LEFT JOIN managed_dns_records m ON m.link_id=l.id
 		WHERE l.id=? AND l.user_id=?`, id, uid).Scan(&domain, &previousStatus, &tokenEnc, &zoneID, &recordID)
 	if err == sql.ErrNoRows {

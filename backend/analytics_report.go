@@ -429,15 +429,23 @@ func (s *server) loadAnalyticsOverview(ctx context.Context, tx *sql.Tx, uid int6
 	out.AnalyticsRetentionDays = boundedConfigDays(ret, 90, 1, 3650)
 	out.GeoProvider = "cloudflare_cf_ipcountry"
 	out.GeoProviderConfigured = true
+	var role string
+	if err := tx.QueryRowContext(ctx, `SELECT role FROM users WHERE id=?`, uid).Scan(&role); err != nil {
+		return out, err
+	}
 	if s.geo != nil {
 		out.GeoFallbackConfigured = s.geo.configured()
 		if out.GeoFallbackConfigured {
 			out.GeoProvider = "cloudflare_cf_ipcountry+ipinfo_lite"
 		}
-		out.GeoQueueDepth = s.geo.queueDepth()
+		if role == "admin" {
+			out.GeoQueueDepth = s.geo.queueDepth()
+		}
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM geo_country_cache WHERE expires_at>CURRENT_TIMESTAMP`).Scan(&out.GeoCacheEntries); err != nil {
-		return out, err
+	if role == "admin" {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM geo_country_cache WHERE expires_at>CURRENT_TIMESTAMP`).Scan(&out.GeoCacheEntries); err != nil {
+			return out, err
+		}
 	}
 	out.RangeStart = filter.Start.Format("2006-01-02")
 	out.RangeEnd = filter.End.Format(time.RFC3339)

@@ -1,5 +1,19 @@
 # Changelog
 
+## 6.0.0-rc14 — optional multi-user tenancy and owner-controlled domain sharing
+
+- Added installer-selected `single` and `multi` deployment modes. Interactive installs prompt once; unattended installs can set `VECTOR_DEPLOYMENT_MODE=single|multi`.
+- Added a minimal multi-user administrator panel for creating regular users, soft-deactivating/reactivating accounts, and resetting passwords.
+- Soft deactivation revokes sessions and blocks login while preserving links, domains, DNS state, analytics, and live redirects.
+- Added owner-controlled domain sharing with one immutable owner and per-user domain memberships/defaults.
+- Shared members can create links and select a shared domain as their default, but cannot access the owner's Cloudflare token or DNS inventory, or perform owner-only DNS, verification, deletion, or membership operations.
+- Removing domain access blocks future link creation while preserving existing member-created links.
+- Any active user can add and manage their own custom domains with their own encrypted Cloudflare token.
+- Added tenant-scoped exports, analytics deletion, audit visibility, link management, and session authorization; system-wide privacy/IPinfo controls and deployment geo-cache reset remain administrator-only.
+- Reserved `/admin` so a short code cannot shadow the administrator panel.
+- Added migrations/backfills for existing rc13 domains, deterministic default-domain repair, one-owner enforcement, and one-active-administrator enforcement.
+- Added regression coverage for regular-user login gating, stale sessions, shared-domain permissions, token isolation, default repair, soft deactivation, redirect continuity, administrator authorization, and schema invariants.
+
 ## Analytics privacy buckets, link-limit fix, and unified controls
 
 - Added explicit `Other` and `Privacy-protected` browser categories.

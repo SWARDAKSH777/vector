@@ -10,11 +10,34 @@
 
 ## Installation
 
+Interactive installation prompts for a tenancy mode before browser setup:
+
+- `single` (default): only the administrator can sign in and `/admin` is not exposed.
+- `multi`: the administrator can manage regular-user accounts and domain owners can share access directly.
+
 ```bash
 sudo bash install.sh
 ```
 
-Save the one-time bootstrap credential. Complete setup at the temporary port, confirm HTTPS, and remove any cloud/UFW/firewalld rule exposing port 8080.
+For automation, make the choice explicit instead of relying on the non-interactive single-user default:
+
+```bash
+sudo VECTOR_DEPLOYMENT_MODE=multi bash install.sh
+```
+
+The browser setup displays the installer-selected mode read-only and rejects a mismatched/tampered mode. Save the one-time bootstrap credential. Complete setup at the temporary port, confirm HTTPS, and remove any cloud/UFW/firewalld rule exposing port 8080.
+
+
+## Multi-user authorization model
+
+- One active administrator manages regular-user lifecycle. There is no multi-admin delegation.
+- Account deletion is intentionally a soft deactivation: sessions are revoked and login is blocked, but hosted content remains live.
+- Each domain has one owner and one owner-controlled encrypted Cloudflare token. Administrators do not implicitly become domain owners.
+- Domain owners grant/remove existing active users from the domain settings page. Shared users can create links and choose personal defaults, but all token, DNS, verification, deletion, and membership operations remain owner-only.
+- Links and analytics are always scoped to their creator. Removing domain membership does not transfer or delete existing links.
+- A domain cannot be deleted while any account still has links using it.
+
+For stronger isolation between mutually untrusted customers, use separate Vector deployments/hosts and separate Cloudflare credentials. Application tenancy does not isolate the kernel, filesystem, process, database, or master key.
 
 ## Verification
 
@@ -82,6 +105,8 @@ The installer writes `GOMAXPROCS=1`, `GOMEMLIMIT=64MiB`, `GOGC=50`, `GODEBUG=mad
 - Back up `vector.db` and `/etc/vector/master.key`.
 - Verify the new release bundle.
 - Run the new installer; it preserves data and the master key.
+- An rc13 database has no tenancy-mode key, so the rc14 installer asks once which mode to adopt. For unattended upgrades, set `VECTOR_DEPLOYMENT_MODE=single|multi`.
+- Later installer runs preserve the stored mode unless the environment override is explicitly supplied. Switching to single mode blocks regular-user sessions/login without deleting account data.
 - Review migrations, service sandbox output, logs, Nginx, and `certbot renew --dry-run`.
 - Keep a tested rollback binary and database backup.
 

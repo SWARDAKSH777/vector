@@ -67,7 +67,7 @@ export function CreateLinkDialog({ open, onClose, onCreated, domains }: Props) {
     setBlocklistError("");
     if (redirectType !== "subdomain" || !selectedHostname) { setBlocklist([]); return () => controller.abort(); }
     const dom = dnsReadyDomains.find((d) => d.hostname === selectedHostname);
-    if (!dom) { setBlocklist([]); return () => controller.abort(); }
+    if (!dom || !dom.can_manage) { setBlocklist([]); return () => controller.abort(); }
     api.getDomainBlocklist(dom.id, controller.signal)
       .then((items) => { setBlocklist(items); setBlocklistError(""); })
       .catch((err) => {

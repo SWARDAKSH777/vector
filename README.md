@@ -5,7 +5,7 @@
 **Self-hosted URL shortener with custom domains, analytics, QR codes, and Cloudflare-assisted DNS/TLS provisioning.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8?logo=go)](https://golang.org)
+[![Go](https://img.shields.io/badge/Go-1.26.4-00ADD8?logo=go)](https://go.dev)
 [![Security](https://img.shields.io/badge/Security-Argon2id-green)](SECURITY.md)
 
 </div>
@@ -16,6 +16,7 @@
 
 - **Short links** — slug-based (`domain.com/code`) and subdomain-based (`code.domain.com`) with custom aliases
 - **Custom domains** — automated DNS record creation and Let's Encrypt TLS via Cloudflare API
+- **Optional multi-user tenancy** — administrator-managed accounts with owner-controlled shared-domain access
 - **Analytics** — click timeseries, unique visitors, device/browser/OS breakdown, referrer traffic, peak hours, and an interactive world map
 - **Country tracking** — Cloudflare-first (zero latency), IPinfo Lite fallback, no raw IP stored
 - **QR codes** — generated server-side, no external service
@@ -36,7 +37,7 @@
 | **Cloudflare** | Required for automated DNS/TLS provisioning |
 | **Port** | 80 and 443 open publicly; 8080 open temporarily during setup |
 
-> **Note:** Vector is designed for a **single administrator** running on a **single node**. It is not a multi-tenant or horizontally-scalable system.
+> **Note:** Vector supports either **single-user** or **multi-user** mode on one node. Multi-user mode isolates accounts at the application/database layer, but it is not horizontal scaling or a substitute for separate hosts where strict infrastructure-level isolation is required.
 
 ---
 
@@ -70,7 +71,7 @@ Point your domain's A record to the server's public IP. This must resolve before
 
 ```bash
 # Download the release
-wget https://github.com/SWARDAKSH777/vector/releases/download/v6.0.0-rc7/vector-release.tar.gz
+wget https://github.com/SWARDAKSH777/vector/releases/download/v6.0.0-rc14/vector-release.tar.gz
 
 # Verify the checksum (replace with published hash)
 sha256sum vector-release.tar.gz
@@ -84,6 +85,17 @@ cd vector-*
 
 ```bash
 sudo bash install.sh
+```
+
+The installer first asks which tenancy mode to use:
+
+- **Single-user** — only the administrator can sign in; no user-management panel is exposed.
+- **Multi-user** — the administrator can create, deactivate, reactivate, and reset regular-user accounts.
+
+For unattended installation, set the choice explicitly:
+
+```bash
+sudo VECTOR_DEPLOYMENT_MODE=multi bash install.sh
 ```
 
 The installer will:
@@ -107,6 +119,8 @@ Open `http://YOUR_SERVER_IP:8080` in your browser.
 5. Vector will create DNS records and obtain a Let's Encrypt certificate
 6. Once HTTPS is confirmed, you will be redirected to `https://YOUR_DOMAIN`
 
+In multi-user mode, the administrator can open **Users** to create regular accounts. Every user can add domains using their own Cloudflare token.
+
 ### Step 6 — Close port 8080
 
 Once setup is complete, close the temporary port:
@@ -116,6 +130,23 @@ sudo ufw delete allow 8080/tcp
 ```
 
 Also remove the port from any cloud firewall (AWS Security Group, Hetzner Firewall, etc.).
+
+---
+
+
+## Multi-user tenancy and shared domains
+
+Vector uses a deliberately small permission model:
+
+- There is exactly one system administrator. The administrator manages accounts, not domain sharing.
+- Every domain has exactly one owner. The owner supplies and controls that domain's encrypted Cloudflare token.
+- The owner can grant or remove access for existing active users from the domain's **Manage access** panel.
+- A shared member can create links on the domain and select it as their own default domain. They cannot read or replace the owner's token, verify/delete the domain, or manage its members.
+- Removing access prevents future link creation on that domain but does not break links the member already created.
+- Deactivating a user blocks login and revokes all sessions, while preserving links, domains, DNS state, and analytics so public redirects continue working.
+- Domain deletion is blocked while any user's links still use the domain.
+
+Switching an existing multi-user installation to single-user mode blocks regular-user login without deleting their data. Switching back to multi-user restores account eligibility, except for accounts explicitly deactivated by the administrator.
 
 ---
 
@@ -183,12 +214,12 @@ gpg --symmetric vector-backup-$(date +%F).tar.gz
 
 ```bash
 # Download and verify the new release bundle
-wget https://github.com/SWARDAKSH777/vector/releases/download/v6.0.0-rc7/vector-release.tar.gz
+wget https://github.com/SWARDAKSH777/vector/releases/download/v6.0.0-rc14/vector-release.tar.gz
 tar -xzf vector-release.tar.gz
 cd vector-*
 
-# Run the preserving upgrade script (keeps your database, master.key, and config)
-sudo bash vector-factory-reset-install.sh   # or the upgrade script shipped in the bundle
+# Run the preserving installer/upgrade (keeps your database, master.key, and config)
+sudo bash install.sh
 ```
 
 The installer verifies checksums before modifying anything and creates a rollback backup automatically.
@@ -208,7 +239,8 @@ The installer verifies checksums before modifying anything and creates a rollbac
 | Proxy trust | Nginx injects a shared secret; Vector rejects forwarded headers from untrusted sources |
 | Privileged operations | Socket-activated root helper; web process has zero sudo rights |
 | Analytics privacy | Pseudonymous visitor IDs; no raw IP stored; referrer origin only; GPC/DNT honored |
-| Dependency supply chain | Vendored `golang.org/x/crypto`; zero runtime CGO (except SQLite); `npm audit` clean |
+| Tenant authorization | Creator-scoped links/analytics, membership-scoped domain use, owner-only token/DNS/domain administration, administrator-only account management |
+| Dependency supply chain | Vendored `golang.org/x/crypto`; SQLite is the only CGO dependency; release checks include frontend audit and Go tests |
 
 See [SECURITY.md](SECURITY.md), [THREAT_MODEL.md](THREAT_MODEL.md), and [PRIVACY.md](PRIVACY.md) for full details.
 
@@ -228,4 +260,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## What's not included
 
-MFA/WebAuthn, SAML/OIDC/SSO, RBAC, multi-tenancy, high availability, external KMS, distributed rate limiting, and formal compliance certification are outside the scope of this release.
+MFA/WebAuthn, SAML/OIDC/SSO, granular/custom RBAC, multiple administrators, high availability, external KMS, distributed rate limiting, infrastructure-level tenant isolation, and formal compliance certification are outside the scope of this release.

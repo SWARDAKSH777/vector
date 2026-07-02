@@ -2,8 +2,8 @@
 
 ## Assets
 
-- Administrator account and sessions.
-- Destination URLs, notes, tags, analytics, and audit events.
+- Administrator and regular-user accounts and sessions.
+- Per-user destination URLs, notes, tags, analytics, domain memberships, and audit events.
 - Cloudflare tokens, DNS records, certificates, and private keys.
 - SQLite database and `/etc/vector/master.key`.
 - Nginx configuration and the privileged helper boundary.
@@ -15,7 +15,8 @@
 3. Vector web service to SQLite and encrypted secrets.
 4. Vector web service to the root helper over `/run/vector-helper.sock`.
 5. Root helper to Nginx, Certbot, Let’s Encrypt, and Cloudflare DNS.
-6. Host/backups/release channel controlled by the operator.
+6. Authorization boundary between administrator, domain owner, shared domain member, and unrelated user.
+7. Host/backups/release channel controlled by the operator.
 
 ## Addressed threats
 
@@ -30,13 +31,18 @@
 - Password verifier disclosure: opaque signed unlock grants.
 - Excessive analytics collection: no raw IP/user-agent/full referrer, GPC/DNT, retention and deletion.
 - Stale/broken TLS: persistent root-only DNS credentials, Certbot timer and reload hook.
+- Cross-user data access: creator predicates on links/analytics/exports, membership predicates for domain use, and owner predicates for Cloudflare token/DNS/domain/member operations.
+- Accidental content outage during account removal: soft deactivation preserves links/domains and revokes only account sessions.
+- Short-code route collision with administration: `/admin` is reserved.
 
 ## Residual risks
 
 - A host/root compromise defeats application controls.
 - A compromised `vector` process can request the helper's narrowly supported operations, but the helper authenticates the exact Unix peer UID, validates the configured backend port, and refuses unmanaged certificate ownership.
 - In-memory rate limits reset on restart and do not coordinate across nodes.
-- No MFA, centralized identity, destination reputation service, anti-phishing moderation, or tenant isolation.
+- No MFA, centralized identity, multiple administrators, destination reputation service, anti-phishing moderation, or infrastructure-level tenant isolation.
+- A system administrator can create/deactivate users and change global settings but does not automatically receive UI/API access to users' private links or owners' Cloudflare tokens. A host/database/master-key compromise bypasses those application controls.
+- Domain owners intentionally decide which existing users may create links on their domains. Removing access cannot retract links already published without separately deleting those links.
 - SQLite and a single host remain availability bottlenecks.
 - Bundled checksum manifests do not prove publisher identity without an external signature/trusted checksum.
 - Analytics visitor hashes are pseudonymous and may be regulated data.

@@ -4,9 +4,9 @@ This document describes the software defaults. The operator remains responsible 
 
 ## Data processed
 
-### Administrator data
+### Account data
 
-- Administrator email address.
+- Administrator and regular-user email addresses and roles.
 - Salted password verifier; plaintext passwords are not stored.
 - Server-side session token digest, timestamps, and a user-agent digest.
 - Security audit events with a keyed hash of the source IP and limited event metadata.
@@ -41,7 +41,13 @@ For verified Cloudflare traffic, the country is supplied in the request path aft
 - Session idle lifetime: 2 hours.
 - GPC and DNT: honored for click analytics.
 
-The administrator can disable detailed analytics, adjust retention, delete analytics, and export account/domain/link data in Settings. Deleting analytics removes detailed events, aggregate rollups, the persistent country cache, and in-flight/in-memory lookup state, and resets the click totals displayed on Links. It intentionally preserves a separate internal lifetime count used only to enforce max-click limits, preventing a privacy deletion from reactivating an exhausted link.
+The administrator can disable detailed analytics and adjust global retention. Each signed-in user can delete analytics for their own links and export their own account, owned/shared-domain relationship, and link data in Settings. Deleting analytics removes that user's detailed events and aggregate rollups and resets the click totals displayed on Links. When the administrator performs the deletion, Vector also clears the deployment-wide pseudonymous country cache and in-flight/in-memory lookup state; regular users cannot modify that shared cache. It intentionally preserves a separate internal lifetime count used only to enforce max-click limits, preventing a privacy deletion from reactivating an exhausted link.
+
+## Account deactivation and domain sharing
+
+Administrator “delete” is implemented as soft deactivation. It sets the account inactive and revokes server-side sessions, but retains the email address, password verifier, links, domains, domain memberships, analytics, and audit history. This preserves live redirects and ownership records. Operators must use content-level deletion, retention procedures, or full deployment purge when legal erasure is required.
+
+A shared-domain membership records the domain, user, role (`owner` or `member`), creation time, and that user's default-domain choice. Shared members do not receive the domain owner's Cloudflare token. Removing membership prevents future use but deliberately leaves previously created links and their analytics intact under the creator's account.
 
 ## Data minimization and deletion
 

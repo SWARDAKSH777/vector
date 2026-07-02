@@ -25,10 +25,20 @@ func (s *server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	done := setupValue == "true"
+	mode, modeErr := s.deploymentModeE()
+	if initial, ok := normalizeDeploymentMode(os.Getenv("VECTOR_INITIAL_DEPLOYMENT_MODE")); !done && ok {
+		mode = initial
+	}
+	if modeErr != nil {
+		writeErr(w, http.StatusServiceUnavailable, "deployment mode is temporarily unavailable")
+		return
+	}
 	bootstrapRequired, bootstrapAuthenticated, bootstrapAvailable, bootstrapMessage := bootstrapStatus(s, r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"setup_complete":          done,
 		"domain":                  domain,
+		"deployment_mode":         mode,
+		"multi_user":              mode == deploymentModeMulti,
 		"bootstrap_required":      bootstrapRequired,
 		"bootstrap_authenticated": bootstrapAuthenticated,
 		"bootstrap_available":     bootstrapAvailable,
@@ -123,9 +133,19 @@ func (s *server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		AdminEmail      string `json:"admin_email"`
 		AdminPassword   string `json:"admin_password"`
 		CloudflareToken string `json:"cloudflare_token"` // optional — stored encrypted for the domain
+		DeploymentMode  string `json:"deployment_mode"`
 	}
 	if err := decodeJSON(w, r, &req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	requestedMode, ok := normalizeDeploymentMode(req.DeploymentMode)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "deployment mode must be single or multi")
+		return
+	}
+	if initialMode, initialOK := normalizeDeploymentMode(os.Getenv("VECTOR_INITIAL_DEPLOYMENT_MODE")); initialOK && requestedMode != initialMode {
+		writeErr(w, http.StatusConflict, "deployment mode does not match the installer selection")
 		return
 	}
 	req.Domain = strings.TrimSpace(req.Domain)
@@ -188,6 +208,10 @@ func (s *server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.setConfigE("deployment_mode", requestedMode); err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not save deployment mode")
+		return
+	}
 	if err := s.setConfigE("domain", req.Domain); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not save the configured domain")
 		return
@@ -207,10 +231,18 @@ func (s *server) handleSetupSubmit(w http.ResponseWriter, r *http.Request) {
 			_, txErr = tx.Exec(`UPDATE domains SET is_default=0 WHERE user_id=?`, adminID)
 		}
 		if txErr == nil {
-			_, txErr = tx.Exec(`INSERT INTO domains (user_id, hostname, status, message, is_default)
+			_, txErr = tx.Exec(`UPDATE domain_members SET is_default=0 WHERE user_id=?`, adminID)
+		}
+		var setupDomainID int64
+		if txErr == nil {
+			txErr = tx.QueryRow(`INSERT INTO domains (user_id, hostname, status, message, is_default)
 				VALUES (?,?,'pending','Complete nginx and SSL setup, then add a Cloudflare token to enable subdomain links.',1)
 				ON CONFLICT(hostname) DO UPDATE SET user_id=excluded.user_id, status='pending',
-				message=excluded.message, is_default=1`, adminID, req.Domain)
+				message=excluded.message, is_default=1 RETURNING id`, adminID, req.Domain).Scan(&setupDomainID)
+		}
+		if txErr == nil {
+			_, txErr = tx.Exec(`INSERT INTO domain_members(domain_id,user_id,access_role,is_default) VALUES(?,?,'owner',1)
+				ON CONFLICT(domain_id,user_id) DO UPDATE SET access_role='owner',is_default=1`, setupDomainID, adminID)
 		}
 		if txErr == nil {
 			txErr = tx.Commit()
@@ -267,6 +299,9 @@ func (s *server) storeSetupDomainToken(hostname, token, primaryOriginIP string) 
 	if _, err = tx.Exec(`UPDATE domains SET is_default=0 WHERE user_id=?`, uid); err != nil {
 		return err
 	}
+	if _, err = tx.Exec(`UPDATE domain_members SET is_default=0 WHERE user_id=?`, uid); err != nil {
+		return err
+	}
 	var domainID, ownerID int64
 	err = tx.QueryRow(`SELECT id,user_id FROM domains WHERE hostname=? COLLATE NOCASE`, hostname).Scan(&domainID, &ownerID)
 	if err == sql.ErrNoRows {
@@ -289,6 +324,10 @@ func (s *server) storeSetupDomainToken(hostname, token, primaryOriginIP string) 
 		if _, err = tx.Exec(`UPDATE domains SET cloudflare_token_enc=?, status='pending', message='Cloudflare DNS configured; nginx and TLS setup is pending.', is_default=1 WHERE id=? AND user_id=?`, enc, domainID, uid); err != nil {
 			return err
 		}
+	}
+	if _, err = tx.Exec(`INSERT INTO domain_members(domain_id,user_id,access_role,is_default) VALUES(?,?,'owner',1)
+		ON CONFLICT(domain_id,user_id) DO UPDATE SET access_role='owner',is_default=1`, domainID, uid); err != nil {
+		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
@@ -442,7 +481,7 @@ func (s *server) handleCheckAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var status string
-	err := s.db.QueryRow(`SELECT status FROM domains WHERE user_id=? AND hostname=? COLLATE NOCASE`, uid, domain).Scan(&status)
+	err := s.db.QueryRow(`SELECT d.status FROM domains d JOIN domain_members dm ON dm.domain_id=d.id WHERE dm.user_id=? AND d.hostname=? COLLATE NOCASE`, uid, domain).Scan(&status)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		writeErr(w, http.StatusInternalServerError, "could not check the selected domain")
 		return

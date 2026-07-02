@@ -411,8 +411,10 @@ func (s *server) authenticatedUserToken(r *http.Request, token string) (int64, e
 	var uaHash string
 	err := s.db.QueryRow(`SELECT s.user_id, s.last_seen_at, s.expires_at, s.user_agent_hash
 		FROM sessions s JOIN users u ON u.id=s.user_id
-		WHERE s.token_hash=? AND u.role='admin' AND u.disabled=0`,
-		tokenDigest(token)).Scan(&uid, &lastSeen, &expires, &uaHash)
+		WHERE s.token_hash=? AND u.disabled=0
+		  AND (u.role='admin' OR (u.role='user' AND EXISTS(
+		    SELECT 1 FROM config WHERE key='deployment_mode' AND value='multi'
+		  )))`, tokenDigest(token)).Scan(&uid, &lastSeen, &expires, &uaHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, errors.New("session invalid")
 	}

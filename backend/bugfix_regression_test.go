@@ -235,7 +235,7 @@ func TestDecodeJSONAcceptsStandardAndStructuredJSONTypes(t *testing.T) {
 
 func TestSetupRejectsMissingDomainToPreventAdminLockout(t *testing.T) {
 	s, _ := newRegressionServer(t)
-	r := httptest.NewRequest(http.MethodPost, "/api/setup", strings.NewReader(`{"domain":"","admin_email":"admin@example.com","admin_password":"correct-horse-battery-staple"}`))
+	r := httptest.NewRequest(http.MethodPost, "/api/setup", strings.NewReader(`{"domain":"","admin_email":"admin@example.com","admin_password":"correct-horse-battery-staple","deployment_mode":"single"}`))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.handleSetupSubmit(w, r)

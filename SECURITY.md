@@ -15,14 +15,14 @@ Expected response targets: acknowledgement within 2 business days, triage within
 ## Security assumptions
 
 - The host OS, root account, Nginx, Certbot, Cloudflare account, DNS registrar, and release distribution channel are trusted.
-- Vector is a single-node, single-administrator SQLite deployment. It is not designed for multi-tenant or multi-administrator use.
+- Vector is a single-node SQLite deployment with one system administrator. Optional application-level multi-user tenancy is supported; multiple administrators and infrastructure-level tenant isolation are not.
 - Compromise of root, the `vector` Unix account, the database together with master.key, or the Cloudflare account can compromise the deployment.
 
 ## Operator responsibilities
 
 - Verify release checksums before installing.
 - Restrict SSH to key auth only, keep OS/Nginx/Certbot updated, and close TCP 8080 after initial setup.
-- Use a least-privilege Cloudflare API token (Zone Read + DNS Edit only).
+- Require every domain owner to use a least-privilege Cloudflare API token (Zone Read + DNS Edit only), scoped only to zones that owner needs.
 - Back up and protect `/etc/vector/master.key`; never commit it or the database to version control.
 - Monitor authentication failures, audit events, and certificate renewal.
 - Run an independent penetration test before handling sensitive or regulated traffic.
@@ -39,7 +39,9 @@ Expected response targets: acknowledgement within 2 business days, triage within
 - **Analytics privacy:** Keyed pseudonymous visitor IDs; no raw IP persistence; referrer origin only; GPC/DNT support; configurable retention.
 - **Privileged helper:** Socket-activated, peer-UID-verified root helper for Nginx/Certbot operations; exits after inactivity.
 - **Proxy authentication:** Nginx injects a shared secret (`/etc/vector/proxy.key`) verified in constant time; forwarded headers are ignored from untrusted sources.
+- **Tenant authorization:** Links and analytics are creator-scoped; domain use requires membership; Cloudflare tokens, DNS inventory/administration, member management, verification, and deletion are owner-only; user lifecycle endpoints are administrator-only.
+- **Soft deactivation:** Disabling a user revokes sessions and prevents login without deleting or reassigning content, avoiding accidental redirect outages.
 
 ## Not yet included
 
-MFA/WebAuthn, SAML/OIDC, RBAC, multi-tenancy, external KMS/HSM, distributed rate limiting, HA, signed update delivery, and formal certification are out of scope for this release.
+MFA/WebAuthn, SAML/OIDC, granular/custom RBAC, multiple administrators, external KMS/HSM, distributed rate limiting, HA, infrastructure-level tenant isolation, signed update delivery, and formal certification are out of scope for this release.

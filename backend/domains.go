@@ -15,15 +15,19 @@ import (
 )
 
 type Domain struct {
-	ID        int64     `json:"id"`
-	Hostname  string    `json:"hostname"`
-	Status    string    `json:"status"`
-	Message   string    `json:"message"`
-	HasToken  bool      `json:"has_token"`
-	DNSReady  bool      `json:"dns_ready"`
-	Proxied   bool      `json:"proxied"`
-	IsDefault bool      `json:"is_default"`
-	CreatedAt time.Time `json:"created_at"`
+	ID         int64     `json:"id"`
+	OwnerID    int64     `json:"owner_id"`
+	OwnerEmail string    `json:"owner_email"`
+	Hostname   string    `json:"hostname"`
+	Status     string    `json:"status"`
+	Message    string    `json:"message"`
+	HasToken   bool      `json:"has_token"`
+	DNSReady   bool      `json:"dns_ready"`
+	Proxied    bool      `json:"proxied"`
+	IsDefault  bool      `json:"is_default"`
+	AccessRole string    `json:"access_role"`
+	CanManage  bool      `json:"can_manage"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Kept as a variable so verification behavior can be regression-tested without
@@ -166,12 +170,16 @@ func checkHTTPReachableURL(url string) error {
 func (s *server) handleListDomains(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r.Context())
 	rows, err := s.db.Query(`
-		SELECT id, hostname, status, message,
-		       (cloudflare_token_enc IS NOT NULL AND cloudflare_token_enc != '') AS has_token,
-		       (status='active' AND cloudflare_token_enc IS NOT NULL AND cloudflare_token_enc != ''
-		        AND cloudflare_zone_id IS NOT NULL AND cloudflare_zone_id != '') AS dns_ready,
-		       proxied, is_default, created_at
-		FROM domains WHERE user_id=? ORDER BY is_default DESC, created_at ASC`, uid)
+		SELECT d.id,d.user_id,owner.email,d.hostname,d.status,d.message,
+		       (dm.access_role='owner' AND d.cloudflare_token_enc IS NOT NULL AND d.cloudflare_token_enc!='') AS has_token,
+		       (d.status='active' AND d.cloudflare_token_enc IS NOT NULL AND d.cloudflare_token_enc!=''
+		        AND d.cloudflare_zone_id IS NOT NULL AND d.cloudflare_zone_id!='') AS dns_ready,
+		       d.proxied,dm.is_default,dm.access_role,d.created_at
+		FROM domain_members dm
+		JOIN domains d ON d.id=dm.domain_id
+		JOIN users owner ON owner.id=d.user_id
+		WHERE dm.user_id=?
+		ORDER BY dm.is_default DESC,CASE dm.access_role WHEN 'owner' THEN 0 ELSE 1 END,d.created_at,d.id`, uid)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not list domains")
 		return
@@ -181,11 +189,12 @@ func (s *server) handleListDomains(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var d Domain
 		var msg sql.NullString
-		if err := rows.Scan(&d.ID, &d.Hostname, &d.Status, &msg, &d.HasToken, &d.DNSReady, &d.Proxied, &d.IsDefault, &d.CreatedAt); err != nil {
+		if err := rows.Scan(&d.ID, &d.OwnerID, &d.OwnerEmail, &d.Hostname, &d.Status, &msg, &d.HasToken, &d.DNSReady, &d.Proxied, &d.IsDefault, &d.AccessRole, &d.CreatedAt); err != nil {
 			writeErr(w, http.StatusInternalServerError, "could not read domain data")
 			return
 		}
 		d.Message = msg.String
+		d.CanManage = d.AccessRole == "owner"
 		domains = append(domains, d)
 	}
 	if err := rows.Err(); err != nil {
@@ -213,7 +222,7 @@ func (s *server) handleAddDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var inheritedEnc, defaultHost string
-	inheritErr := s.db.QueryRow(`SELECT hostname, COALESCE(cloudflare_token_enc,'') FROM domains WHERE user_id=? AND is_default=1`, uid).Scan(&defaultHost, &inheritedEnc)
+	inheritErr := s.db.QueryRow(`SELECT d.hostname,COALESCE(d.cloudflare_token_enc,'') FROM domains d JOIN domain_members dm ON dm.domain_id=d.id WHERE dm.user_id=? AND dm.access_role='owner' AND dm.is_default=1`, uid).Scan(&defaultHost, &inheritedEnc)
 	if inheritErr != nil && !errors.Is(inheritErr, sql.ErrNoRows) {
 		writeErr(w, http.StatusInternalServerError, "could not inspect the default domain")
 		return
@@ -264,6 +273,13 @@ func (s *server) handleVerifyDomain(w http.ResponseWriter, r *http.Request) {
 	defer s.domainMutationMu.Unlock()
 	uid := userIDFromCtx(r.Context())
 	id := atoiOr(r.PathValue("id"), -1)
+	if _, ownerErr := s.ownedDomainByID(uid, id); errors.Is(ownerErr, sql.ErrNoRows) {
+		writeErr(w, http.StatusNotFound, "domain not found")
+		return
+	} else if ownerErr != nil {
+		writeErr(w, http.StatusInternalServerError, "could not load domain")
+		return
+	}
 	d, err := s.fetchDomain(uid, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeErr(w, http.StatusNotFound, "domain not found")
@@ -350,8 +366,7 @@ func (s *server) handleSetDefaultDomain(w http.ResponseWriter, r *http.Request) 
 	defer s.domainMutationMu.Unlock()
 	uid := userIDFromCtx(r.Context())
 	id := atoiOr(r.PathValue("id"), -1)
-	var status string
-	err := s.db.QueryRow(`SELECT status FROM domains WHERE id=? AND user_id=?`, id, uid).Scan(&status)
+	access, err := s.domainAccessByID(uid, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeErr(w, http.StatusNotFound, "domain not found")
 		return
@@ -360,29 +375,29 @@ func (s *server) handleSetDefaultDomain(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, http.StatusInternalServerError, "could not load domain")
 		return
 	}
-	if status != "active" {
+	if access.Status != "active" {
 		writeErr(w, http.StatusConflict, "only an active, verified domain can be set as default")
 		return
 	}
-
 	tx, err := s.db.Begin()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not update default domain")
-		return
+	if err == nil {
+		_, err = tx.Exec(`UPDATE domain_members SET is_default=0 WHERE user_id=?`, uid)
 	}
-	if _, err = tx.Exec(`UPDATE domains SET is_default=0 WHERE user_id=?`, uid); err == nil {
-		_, err = tx.Exec(`UPDATE domains SET is_default=1 WHERE id=? AND user_id=?`, id, uid)
+	if err == nil {
+		_, err = tx.Exec(`UPDATE domain_members SET is_default=1 WHERE user_id=? AND domain_id=?`, uid, id)
 	}
-	if err != nil {
+	if err == nil {
+		err = syncLegacyDefaultTx(tx, uid)
+	}
+	if err == nil {
+		err = tx.Commit()
+	} else if tx != nil {
 		_ = tx.Rollback()
+	}
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not update default domain")
 		return
 	}
-	if err := tx.Commit(); err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not update default domain")
-		return
-	}
-
 	s.audit(r, uid, "domain.default_set", "domain", idString(id), nil)
 	d, fetchErr := s.fetchDomain(uid, id)
 	if fetchErr != nil {
@@ -435,7 +450,7 @@ func (s *server) handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var linkCount int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM links WHERE user_id=? AND domain=?`, uid, hostname).Scan(&linkCount); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM links WHERE domain=? COLLATE NOCASE`, hostname).Scan(&linkCount); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not inspect domain links")
 		return
 	}
@@ -497,7 +512,45 @@ func (s *server) handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, "could not remove nginx/TLS configuration: "+message)
 		return
 	}
-	res, err := s.db.Exec(`DELETE FROM domains WHERE id=? AND user_id=?`, id, uid)
+	rows, err = s.db.Query(`SELECT user_id FROM domain_members WHERE domain_id=? AND is_default=1`, id)
+	if err != nil {
+		s.setDomainError(uid, id, "External cleanup completed, but default-domain state could not be inspected. Retry deletion.")
+		writeErr(w, http.StatusInternalServerError, "could not inspect domain defaults")
+		return
+	}
+	affectedDefaults := []int64{}
+	for rows.Next() {
+		var memberID int64
+		if scanErr := rows.Scan(&memberID); scanErr != nil {
+			rows.Close()
+			writeErr(w, http.StatusInternalServerError, "could not inspect domain defaults")
+			return
+		}
+		affectedDefaults = append(affectedDefaults, memberID)
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		rows.Close()
+		writeErr(w, http.StatusInternalServerError, "could not inspect domain defaults")
+		return
+	}
+	rows.Close()
+	tx, err := s.db.Begin()
+	var res sql.Result
+	if err == nil {
+		res, err = tx.Exec(`DELETE FROM domains WHERE id=? AND user_id=?`, id, uid)
+	}
+	if err == nil {
+		for _, memberID := range affectedDefaults {
+			if err = repairDefaultDomainTx(tx, memberID); err != nil {
+				break
+			}
+		}
+	}
+	if err == nil {
+		err = tx.Commit()
+	} else if tx != nil {
+		_ = tx.Rollback()
+	}
 	if err != nil {
 		s.setDomainError(uid, id, "External cleanup completed, but the database row could not be removed. Retry deletion.")
 		writeErr(w, http.StatusInternalServerError, "could not delete domain")
@@ -509,7 +562,7 @@ func (s *server) handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n == 0 {
-		writeErr(w, 404, "domain not found")
+		writeErr(w, http.StatusNotFound, "domain not found")
 		return
 	}
 	s.audit(r, uid, "domain.deleted", "domain", idString(id), map[string]any{"hostname": hostname})
@@ -520,10 +573,10 @@ func (s *server) handleDeleteDomain(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleGetSubdomainBlocklist(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r.Context())
 	id := atoiOr(r.PathValue("id"), -1)
-
 	var hostname, zoneID, tokenEnc, status string
-	err := s.db.QueryRow(`SELECT hostname, COALESCE(cloudflare_zone_id,''), COALESCE(cloudflare_token_enc,''), status
-		FROM domains WHERE id=? AND user_id=?`, id, uid).Scan(&hostname, &zoneID, &tokenEnc, &status)
+	err := s.db.QueryRow(`SELECT hostname,COALESCE(cloudflare_zone_id,''),COALESCE(cloudflare_token_enc,''),status
+		FROM domains WHERE id=? AND user_id=?`, id, uid).
+		Scan(&hostname, &zoneID, &tokenEnc, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		writeErr(w, http.StatusNotFound, "domain not found")
 		return
@@ -542,7 +595,7 @@ func (s *server) handleGetSubdomainBlocklist(w http.ResponseWriter, r *http.Requ
 	}
 	tok, err := s.decryptDomainToken(hostname, tokenEnc)
 	if err != nil || tok == "" {
-		writeErr(w, http.StatusConflict, "stored Cloudflare token is invalid; replace it in Domains")
+		writeErr(w, http.StatusConflict, "the domain owner must replace the invalid Cloudflare token")
 		return
 	}
 	cf := &cloudflareClient{apiToken: tok, http: defaultHTTPClient()}
@@ -620,41 +673,46 @@ func (s *server) recordManagedDNS(domainID, linkID int64, zoneID, recordID, host
 }
 
 func (s *server) setDomainError(uid, id int64, message string) {
-	_, _ = s.db.Exec(`UPDATE domains SET status='error', message=? WHERE id=? AND user_id=?`, message, id, uid)
+	_, _ = s.db.Exec(`UPDATE domains SET status='error', message=? WHERE id=?`, message, id)
 }
 
 func (s *server) fetchDomain(uid, id int64) (Domain, error) {
 	var d Domain
 	var msg sql.NullString
-	err := s.db.QueryRow(`
-		SELECT id, hostname, status, message,
-		       (cloudflare_token_enc IS NOT NULL AND cloudflare_token_enc != '') AS has_token,
-		       (status='active' AND cloudflare_token_enc IS NOT NULL AND cloudflare_token_enc != ''
-		        AND cloudflare_zone_id IS NOT NULL AND cloudflare_zone_id != '') AS dns_ready,
-		       proxied, is_default, created_at
-		FROM domains WHERE id=? AND user_id=?`, id, uid).
-		Scan(&d.ID, &d.Hostname, &d.Status, &msg, &d.HasToken, &d.DNSReady, &d.Proxied, &d.IsDefault, &d.CreatedAt)
+	err := s.db.QueryRow(`SELECT d.id,d.user_id,owner.email,d.hostname,d.status,d.message,
+		(dm.access_role='owner' AND d.cloudflare_token_enc IS NOT NULL AND d.cloudflare_token_enc!='') AS has_token,
+		(d.status='active' AND d.cloudflare_token_enc IS NOT NULL AND d.cloudflare_token_enc!='' AND d.cloudflare_zone_id IS NOT NULL AND d.cloudflare_zone_id!='') AS dns_ready,
+		d.proxied,dm.is_default,dm.access_role,d.created_at
+		FROM domains d JOIN domain_members dm ON dm.domain_id=d.id JOIN users owner ON owner.id=d.user_id
+		WHERE d.id=? AND dm.user_id=?`, id, uid).
+		Scan(&d.ID, &d.OwnerID, &d.OwnerEmail, &d.Hostname, &d.Status, &msg, &d.HasToken, &d.DNSReady, &d.Proxied, &d.IsDefault, &d.AccessRole, &d.CreatedAt)
 	d.Message = msg.String
+	d.CanManage = d.AccessRole == "owner"
 	return d, err
 }
 
 func (s *server) defaultDomainForUserE(uid int64) (string, error) {
 	var hostname string
-	err := s.db.QueryRow(`SELECT hostname FROM domains WHERE user_id=? AND is_default=1 AND status='active'`, uid).Scan(&hostname)
+	err := s.db.QueryRow(`SELECT d.hostname FROM domain_members dm JOIN domains d ON d.id=dm.domain_id
+		WHERE dm.user_id=? AND dm.is_default=1 AND d.status='active'`, uid).Scan(&hostname)
 	if err == nil {
 		return hostname, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	err = s.db.QueryRow(`SELECT hostname FROM domains WHERE user_id=? AND status='active' ORDER BY created_at ASC LIMIT 1`, uid).Scan(&hostname)
+	err = s.db.QueryRow(`SELECT d.hostname FROM domain_members dm JOIN domains d ON d.id=dm.domain_id
+		WHERE dm.user_id=? AND d.status='active' ORDER BY CASE dm.access_role WHEN 'owner' THEN 0 ELSE 1 END,d.created_at,d.id LIMIT 1`, uid).Scan(&hostname)
 	if err == nil {
 		return hostname, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	return s.getConfigE("domain")
+	// A user with no accessible active domain has no default. The primary
+	// installation domain belongs to its owner and must never become an
+	// implicit cross-tenant fallback.
+	return "", nil
 }
 
 func (s *server) defaultDomainForUser(uid int64) string {

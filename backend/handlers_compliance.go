@@ -81,6 +81,12 @@ func (s *server) handleUpdatePrivacySettings(w http.ResponseWriter, r *http.Requ
 }
 func (s *server) handleDeleteAnalytics(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r.Context())
+	role, roleErr := s.userRole(uid)
+	if roleErr != nil {
+		writeErr(w, http.StatusInternalServerError, "could not verify account permissions")
+		return
+	}
+	isAdmin := role == "admin"
 	tx, err := s.db.Begin()
 	if err != nil {
 		writeErr(w, 500, "could not delete analytics")
@@ -103,10 +109,12 @@ func (s *server) handleDeleteAnalytics(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "could not delete aggregate analytics")
 		return
 	}
-	if _, err = tx.Exec(`DELETE FROM geo_country_cache`); err != nil {
-		_ = tx.Rollback()
-		writeErr(w, 500, "could not delete geographic cache")
-		return
+	if isAdmin {
+		if _, err = tx.Exec(`DELETE FROM geo_country_cache`); err != nil {
+			_ = tx.Rollback()
+			writeErr(w, 500, "could not delete geographic cache")
+			return
+		}
 	}
 	res, err = tx.Exec(`UPDATE links SET click_count=0 WHERE user_id=?`, uid)
 	if err != nil {
@@ -119,23 +127,34 @@ func (s *server) handleDeleteAnalytics(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "could not delete analytics")
 		return
 	}
-	if s.geo != nil {
+	if isAdmin && s.geo != nil {
 		s.geo.reset()
 	}
 	s.clearAnalyticsReportCache()
 	s.audit(r, uid, "privacy.analytics_deleted", "analytics", "all", map[string]any{
 		"rows": deleted, "link_counters_reset": reset,
 	})
-	writeJSON(w, 200, map[string]any{"ok": true, "deleted": deleted, "counters_reset": reset})
+	writeJSON(w, 200, map[string]any{"ok": true, "deleted": deleted, "counters_reset": reset, "geo_cache_reset": isAdmin})
 }
 
 func (s *server) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r.Context())
+	role, roleErr := s.userRole(uid)
+	if roleErr != nil {
+		writeErr(w, http.StatusInternalServerError, "could not verify account permissions")
+		return
+	}
 	limit := 100
 	if n, e := strconv.Atoi(r.URL.Query().Get("limit")); e == nil && n > 0 && n <= 500 {
 		limit = n
 	}
-	rows, err := s.db.Query(`SELECT id,event,target_type,target_id,metadata,created_at FROM audit_logs WHERE actor_id=? OR actor_id IS NULL ORDER BY id DESC LIMIT ?`, uid, limit)
+	query := `SELECT id,event,target_type,target_id,metadata,created_at FROM audit_logs WHERE actor_id=? ORDER BY id DESC LIMIT ?`
+	args := []any{uid, limit}
+	if role == "admin" {
+		query = `SELECT id,event,target_type,target_id,metadata,created_at FROM audit_logs ORDER BY id DESC LIMIT ?`
+		args = []any{limit}
+	}
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		writeErr(w, 500, "could not load audit log")
 		return
@@ -173,9 +192,11 @@ func (s *server) handleAuditLog(w http.ResponseWriter, r *http.Request) {
 func (s *server) handleDataExport(w http.ResponseWriter, r *http.Request) {
 	uid := userIDFromCtx(r.Context())
 	type exportDomain struct {
-		Hostname  string `json:"hostname"`
-		Status    string `json:"status"`
-		IsDefault bool   `json:"is_default"`
+		Hostname   string `json:"hostname"`
+		Status     string `json:"status"`
+		IsDefault  bool   `json:"is_default"`
+		AccessRole string `json:"access_role"`
+		OwnerEmail string `json:"owner_email"`
 	}
 	type exportLink struct {
 		ShortCode      string    `json:"short_code"`
@@ -189,24 +210,24 @@ func (s *server) handleDataExport(w http.ResponseWriter, r *http.Request) {
 		CreatedAt      time.Time `json:"created_at"`
 	}
 	export := struct {
-		ExportedAt time.Time       `json:"exported_at"`
-		AdminEmail string          `json:"admin_email"`
-		Privacy    privacySettings `json:"privacy"`
-		Domains    []exportDomain  `json:"domains"`
-		Links      []exportLink    `json:"links"`
+		ExportedAt   time.Time       `json:"exported_at"`
+		AccountEmail string          `json:"account_email"`
+		Privacy      privacySettings `json:"privacy"`
+		Domains      []exportDomain  `json:"domains"`
+		Links        []exportLink    `json:"links"`
 	}{ExportedAt: time.Now().UTC(), Privacy: s.currentPrivacySettings(), Domains: []exportDomain{}, Links: []exportLink{}}
-	if err := s.db.QueryRow(`SELECT email FROM users WHERE id=?`, uid).Scan(&export.AdminEmail); err != nil {
+	if err := s.db.QueryRow(`SELECT email FROM users WHERE id=?`, uid).Scan(&export.AccountEmail); err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not export account data")
 		return
 	}
-	rows, err := s.db.Query(`SELECT hostname,status,is_default FROM domains WHERE user_id=? ORDER BY created_at`, uid)
+	rows, err := s.db.Query(`SELECT d.hostname,d.status,dm.is_default,dm.access_role,owner.email FROM domain_members dm JOIN domains d ON d.id=dm.domain_id JOIN users owner ON owner.id=d.user_id WHERE dm.user_id=? ORDER BY d.created_at`, uid)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not export domain data")
 		return
 	}
 	for rows.Next() {
 		var d exportDomain
-		if err := rows.Scan(&d.Hostname, &d.Status, &d.IsDefault); err != nil {
+		if err := rows.Scan(&d.Hostname, &d.Status, &d.IsDefault, &d.AccessRole, &d.OwnerEmail); err != nil {
 			rows.Close()
 			writeErr(w, http.StatusInternalServerError, "could not read domain export data")
 			return

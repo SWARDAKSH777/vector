@@ -29,6 +29,7 @@ type server struct {
 	setupSubmitMu    sync.Mutex
 	domainMutationMu sync.Mutex
 	linkMutationMu   sync.Mutex
+	userMutationMu   sync.Mutex
 	geo              *countryGeoResolver
 
 	analyticsHealthMu        sync.RWMutex
@@ -52,7 +53,7 @@ var (
 
 var reservedCodes = map[string]bool{
 	"links": true, "analytics": true, "qr": true, "domains": true,
-	"settings": true, "api": true, "login": true, "logout": true,
+	"settings": true, "admin": true, "api": true, "login": true, "logout": true,
 	"static": true, "assets": true, "favicon.ico": true, "setup": true,
 	"unlock": true, ".well-known": true, "healthz": true, "robots.txt": true, "": true,
 }
@@ -111,7 +112,7 @@ func main() {
 	mux.HandleFunc("POST /api/setup/bootstrap/logout", s.handleBootstrapLogout)
 	mux.HandleFunc("POST /api/setup", s.requireBootstrap(s.handleSetupSubmit))
 	mux.HandleFunc("POST /api/setup/check-domain", s.requireBootstrap(s.handleSetupCheckDomain))
-	mux.HandleFunc("POST /api/setup/nginx", s.requireBootstrap(s.requireAuth(s.handleSetupNginx)))
+	mux.HandleFunc("POST /api/setup/nginx", s.requireBootstrap(s.requireAuth(s.requireSystemAdmin(s.handleSetupNginx))))
 
 	mux.HandleFunc("POST /api/auth/login", s.handleLogin)
 	mux.HandleFunc("POST /api/auth/logout", s.handleLogout)
@@ -145,13 +146,22 @@ func main() {
 	mux.HandleFunc("POST /api/domains/{id}/token", s.requireAuth(s.handleDomainTokenSave))
 	mux.HandleFunc("DELETE /api/domains/{id}/token", s.requireAuth(s.handleDomainTokenDelete))
 	mux.HandleFunc("GET /api/domains/{id}/blocklist", s.requireAuth(s.handleGetSubdomainBlocklist))
+	mux.HandleFunc("GET /api/domains/{id}/members", s.requireAuth(s.handleListDomainMembers))
+	mux.HandleFunc("POST /api/domains/{id}/members", s.requireAuth(s.handleAddDomainMember))
+	mux.HandleFunc("DELETE /api/domains/{id}/members/{userID}", s.requireAuth(s.handleDeleteDomainMember))
+
+	mux.HandleFunc("GET /api/admin/users", s.requireAuth(s.requireAdmin(s.handleAdminListUsers)))
+	mux.HandleFunc("POST /api/admin/users", s.requireAuth(s.requireAdmin(s.handleAdminCreateUser)))
+	mux.HandleFunc("DELETE /api/admin/users/{id}", s.requireAuth(s.requireAdmin(s.handleAdminDeactivateUser)))
+	mux.HandleFunc("POST /api/admin/users/{id}/reactivate", s.requireAuth(s.requireAdmin(s.handleAdminReactivateUser)))
+	mux.HandleFunc("POST /api/admin/users/{id}/reset-password", s.requireAuth(s.requireAdmin(s.handleAdminResetPassword)))
 
 	// Privacy, retention, portability and security-audit controls.
 	mux.HandleFunc("GET /api/settings/privacy", s.requireAuth(s.handleGetPrivacySettings))
-	mux.HandleFunc("PUT /api/settings/privacy", s.requireAuth(s.handleUpdatePrivacySettings))
-	mux.HandleFunc("GET /api/settings/ipinfo-token", s.requireAuth(s.handleGetIPInfoToken))
-	mux.HandleFunc("PUT /api/settings/ipinfo-token", s.requireAuth(s.handleSaveIPInfoToken))
-	mux.HandleFunc("DELETE /api/settings/ipinfo-token", s.requireAuth(s.handleDeleteIPInfoToken))
+	mux.HandleFunc("PUT /api/settings/privacy", s.requireAuth(s.requireSystemAdmin(s.handleUpdatePrivacySettings)))
+	mux.HandleFunc("GET /api/settings/ipinfo-token", s.requireAuth(s.requireSystemAdmin(s.handleGetIPInfoToken)))
+	mux.HandleFunc("PUT /api/settings/ipinfo-token", s.requireAuth(s.requireSystemAdmin(s.handleSaveIPInfoToken)))
+	mux.HandleFunc("DELETE /api/settings/ipinfo-token", s.requireAuth(s.requireSystemAdmin(s.handleDeleteIPInfoToken)))
 	mux.HandleFunc("DELETE /api/settings/analytics", s.requireAuth(s.handleDeleteAnalytics))
 	mux.HandleFunc("GET /api/settings/export", s.requireAuth(s.handleDataExport))
 	mux.HandleFunc("GET /api/audit", s.requireAuth(s.handleAuditLog))

@@ -5,15 +5,10 @@ import React, {
   useState,
   useCallback,
 } from "react";
-import { APIError, api, clearAPICache } from "../lib/api";
-
-interface User {
-  id: number;
-  email: string;
-}
+import { APIError, api, clearAPICache, type AuthUser } from "../lib/api";
 
 interface AuthCtx {
-  user: User | null;
+  user: AuthUser | null;
   loading: boolean;
   error: string;
   retry: () => Promise<void>;
@@ -31,7 +26,7 @@ const Ctx = createContext<AuthCtx>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 

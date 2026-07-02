@@ -13,6 +13,7 @@ const loadAnalytics = () => import("./pages/Analytics");
 const loadQR = () => import("./pages/QR");
 const loadDomains = () => import("./pages/Domains");
 const loadSettings = () => import("./pages/Settings");
+const loadAdmin = () => import("./pages/Admin");
 const SetupPage = lazy(() => loadSetup().then((module) => ({ default: module.SetupPage })));
 const LoginPage = lazy(() => loadLogin().then((module) => ({ default: module.LoginPage })));
 const DashboardPage = lazy(() => loadDashboard().then((module) => ({ default: module.DashboardPage })));
@@ -21,6 +22,7 @@ const AnalyticsPage = lazy(() => loadAnalytics().then((module) => ({ default: mo
 const QRPage = lazy(() => loadQR().then((module) => ({ default: module.QRPage })));
 const DomainsPage = lazy(() => loadDomains().then((module) => ({ default: module.DomainsPage })));
 const SettingsPage = lazy(() => loadSettings().then((module) => ({ default: module.SettingsPage })));
+const AdminPage = lazy(() => loadAdmin().then((module) => ({ default: module.AdminPage })));
 
 function LoadingScreen() { return <div className="flex items-center justify-center h-screen"><div className="animate-spin h-5 w-5 rounded-full border-2 border-primary border-t-transparent"/></div>; }
 function SetupGuard({children}:{children:React.ReactNode}) {
@@ -45,6 +47,15 @@ function ProtectedRoute({children}:{children:React.ReactNode}) {
   return <>{children}</>;
 }
 
+function AdminRoute({children}:{children:React.ReactNode}) {
+  const {user,loading,error,retry}=useAuth();
+  if(loading)return <LoadingScreen/>;
+  if(error)return <div className="min-h-screen flex items-center justify-center p-6"><div className="max-w-md rounded-xl border border-destructive/30 bg-card p-5 text-center"><p className="font-semibold">Session check failed</p><p className="mt-2 text-sm text-muted-foreground">{error}</p><button className="mt-4 rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground" onClick={()=>void retry()}>Retry</button></div></div>;
+  if(!user)return <Navigate to="/login" replace/>;
+  if(user.role!=="admin" || !user.multi_user)return <Navigate to="/" replace/>;
+  return <>{children}</>;
+}
+
 function AuthenticatedPreload() {
   const { user } = useAuth();
   useEffect(() => {
@@ -52,8 +63,8 @@ function AuthenticatedPreload() {
     let cancelled = false;
     const run = () => {
       if (cancelled) return;
-      void Promise.allSettled([loadDashboard(), loadLinks(), loadAnalytics(), loadQR(), loadDomains(), loadSettings()]);
-      void Promise.allSettled([api.analyticsReport({ range: "30d" }), api.listLinks(), api.listDomains(), api.getPrivacySettings(), api.getIPInfoTokenStatus()]);
+      void Promise.allSettled([loadDashboard(), loadLinks(), loadAnalytics(), loadQR(), loadDomains(), loadSettings(), ...(user.role === "admin" && user.multi_user ? [loadAdmin()] : [])]);
+      void Promise.allSettled([api.analyticsReport({ range: "30d" }), api.listLinks(), api.listDomains(), api.getPrivacySettings(), ...(user.role === "admin" ? [api.getIPInfoTokenStatus()] : [])]);
     };
     const windowWithIdle = window as Window & { requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number; cancelIdleCallback?: (id: number) => void };
     if (windowWithIdle.requestIdleCallback) {
@@ -66,6 +77,6 @@ function AuthenticatedPreload() {
   return null;
 }
 
-function App() { return <BrowserRouter><AuthProvider><AuthenticatedPreload/><SetupGuard><Suspense fallback={<LoadingScreen/>}><Routes><Route path="/setup" element={<SetupPage/>}/><Route path="/login" element={<LoginPage/>}/><Route path="/" element={<ProtectedRoute><DashboardPage/></ProtectedRoute>}/><Route path="/links" element={<ProtectedRoute><LinksPage/></ProtectedRoute>}/><Route path="/analytics" element={<ProtectedRoute><AnalyticsPage/></ProtectedRoute>}/><Route path="/qr" element={<ProtectedRoute><QRPage/></ProtectedRoute>}/><Route path="/domains" element={<ProtectedRoute><DomainsPage/></ProtectedRoute>}/><Route path="/settings" element={<ProtectedRoute><SettingsPage/></ProtectedRoute>}/><Route path="*" element={<Navigate to="/" replace/>}/></Routes></Suspense></SetupGuard></AuthProvider></BrowserRouter>; }
+function App() { return <BrowserRouter><AuthProvider><AuthenticatedPreload/><SetupGuard><Suspense fallback={<LoadingScreen/>}><Routes><Route path="/setup" element={<SetupPage/>}/><Route path="/login" element={<LoginPage/>}/><Route path="/" element={<ProtectedRoute><DashboardPage/></ProtectedRoute>}/><Route path="/links" element={<ProtectedRoute><LinksPage/></ProtectedRoute>}/><Route path="/analytics" element={<ProtectedRoute><AnalyticsPage/></ProtectedRoute>}/><Route path="/qr" element={<ProtectedRoute><QRPage/></ProtectedRoute>}/><Route path="/domains" element={<ProtectedRoute><DomainsPage/></ProtectedRoute>}/><Route path="/settings" element={<ProtectedRoute><SettingsPage/></ProtectedRoute>}/><Route path="/admin" element={<AdminRoute><AdminPage/></AdminRoute>}/><Route path="*" element={<Navigate to="/" replace/>}/></Routes></Suspense></SetupGuard></AuthProvider></BrowserRouter>; }
 
 ReactDOM.createRoot(document.getElementById("root")!).render(<React.StrictMode><App/></React.StrictMode>);
